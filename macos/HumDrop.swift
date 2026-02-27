@@ -1757,7 +1757,7 @@ class MainWindowController: NSWindowController {
     @objc func showAbout() {
         let alert = NSAlert()
         alert.messageText = "HumDrop"
-        alert.informativeText = "v0.05\nBy Kenneth Russell DeGraff\n\nSync videos and photos from your camera.\n\nDownloads to:\n\(camera.videoDir.path)\n\nCamera IP: \(camera.cameraIP)"
+        alert.informativeText = "v0.05\nBy Kenneth Russell DeGraff\n\nSync videos and photos from your camera.\n\nDownloads to:\n\(camera.videoDir.path)\n\nCamera IP: \(camera.cameraIP)\n\nko-fi.com/fe2_o3"
         alert.icon = createAppIcon()
         alert.addButton(withTitle: "OK")
         alert.runModal()
