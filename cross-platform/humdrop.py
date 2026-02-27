@@ -11,6 +11,7 @@ import os
 import sys
 import re
 import json
+import math
 import time
 import socket
 import shutil
@@ -19,6 +20,7 @@ import subprocess
 import threading
 import webbrowser
 import urllib.request
+import tkinter as tk
 from enum import Enum
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -625,13 +627,19 @@ class CameraManager:
 TEAL = "#1AB89E"
 TEAL_DARK = "#158F7A"
 TEAL_HOVER = "#1FD4B5"
-GREEN = "#4DD974"
+ORANGE = "#E8863A"
+ORANGE_HOVER = "#F09848"
+GREEN = "#34B759"
 RED = "#F24D40"
-BG_DARK = "#1a1a1a"
-BG_CARD = "#2b2b2b"
-BG_HEADER = "#222222"
-TEXT_SEC = "#b0b0b0"       # secondary labels — readable on dark bg
-TEXT_MUTED = "#909090"     # muted/example text — still legible
+
+# Adaptive color pairs: (light_mode, dark_mode)
+# CustomTkinter widgets accept these tuples directly
+BG_CARD = ("#ffffff", "#333333")
+BG_HEADER = ("#eef0f2", "#262628")
+TEXT_SEC = ("#555555", "#b0b0b0")
+TEXT_MUTED = ("#888888", "#707070")
+BORDER = ("#d0d0d0", "#444444")
+STRIPE = ("#f5f5f7", "#383838")
 
 
 # ============================================================
@@ -649,7 +657,7 @@ class HumDropApp(ctk.CTk):
         self.title("HumDrop")
         self.geometry("720x800")
         self.minsize(600, 650)
-        ctk.set_appearance_mode("dark")
+        ctk.set_appearance_mode("system")
 
         self._build_ui()
         self._show_disconnected()
@@ -661,13 +669,207 @@ class HumDropApp(ctk.CTk):
         self.bind_all("<Command-o>", lambda e: self._open_folder())
         self.bind_all("<Control-o>", lambda e: self._open_folder())
 
+        # Monitor appearance changes to update Treeview
+        self._last_mode = self._is_dark()
+        self._poll_appearance()
+
+    def _is_dark(self) -> bool:
+        return ctk.get_appearance_mode() == "Dark"
+
+    def _resolve(self, color_pair):
+        """Resolve a (light, dark) color tuple to current mode's color."""
+        if isinstance(color_pair, tuple):
+            return color_pair[1] if self._is_dark() else color_pair[0]
+        return color_pair
+
+    def _poll_appearance(self):
+        """Check for system appearance changes and update non-CTk widgets."""
+        dark = self._is_dark()
+        if dark != self._last_mode:
+            self._last_mode = dark
+            self._apply_tree_theme()
+            self._update_bird_icons()
+        self.after(1000, self._poll_appearance)
+
+    def _create_bird_canvas(self, parent, size=120):
+        """Draw a stylized bird icon similar to the native Swift app icon."""
+        bg = self._resolve(("#f0f0f0", "#1e1e1e"))
+        c = tk.Canvas(parent, width=size, height=size, highlightthickness=0, bg=bg)
+
+        s = size
+        pad = 2
+        r = s * 0.22
+
+        # Rounded rectangle background — deep teal base
+        pts = [
+            pad + r, pad,
+            s - pad - r, pad,
+            s - pad, pad,
+            s - pad, pad + r,
+            s - pad, s - pad - r,
+            s - pad, s - pad,
+            s - pad - r, s - pad,
+            pad + r, s - pad,
+            pad, s - pad,
+            pad, s - pad - r,
+            pad, pad + r,
+            pad, pad,
+        ]
+        c.create_polygon(pts, smooth=True, fill=TEAL_DARK, outline="")
+
+        # Lighter teal overlay on top half for gradient feel
+        top_pts = [
+            pad + r, pad,
+            s - pad - r, pad,
+            s - pad, pad,
+            s - pad, pad + r,
+            s - pad, s * 0.50,
+            pad, s * 0.50,
+            pad, pad + r,
+            pad, pad,
+        ]
+        c.create_polygon(top_pts, smooth=True, fill=TEAL, outline="", stipple="gray50")
+
+        # Subtle border
+        c.create_polygon(pts, smooth=True, fill="", outline="white", width=1)
+
+        # Branch — a gentle curved line across the middle
+        branch_y = s * 0.54
+        c.create_line(
+            s * 0.06, branch_y + s * 0.02,
+            s * 0.30, branch_y - s * 0.01,
+            s * 0.60, branch_y + s * 0.01,
+            s * 0.94, branch_y - s * 0.005,
+            fill="#5C3118", width=max(2, s * 0.028), smooth=True, capstyle="round"
+        )
+        # Small twig
+        c.create_line(
+            s * 0.72, branch_y, s * 0.79, branch_y - s * 0.09,
+            fill="#5C3118", width=max(1, s * 0.014), capstyle="round"
+        )
+
+        # Bird body (larger white oval, sitting on branch)
+        bx = s * 0.50
+        by = branch_y - s * 0.13
+        bw = s * 0.10
+        bh = s * 0.13
+        c.create_oval(bx - bw, by - bh, bx + bw, by + bh, fill="white", outline="")
+
+        # Head (circle, overlapping top of body)
+        hr = s * 0.068
+        hx = bx + s * 0.018
+        hy = by - bh - hr * 0.15
+        c.create_oval(hx - hr, hy - hr, hx + hr, hy + hr, fill="white", outline="")
+
+        # Eye
+        er = max(1.5, s * 0.014)
+        ex = hx + hr * 0.38
+        ey = hy - hr * 0.08
+        c.create_oval(ex - er, ey - er, ex + er, ey + er, fill="#2a1510", outline="")
+        # Eye highlight
+        hlr = er * 0.45
+        c.create_oval(ex - hlr + er * 0.35, ey - hlr + er * 0.35,
+                      ex + hlr + er * 0.35, ey + hlr + er * 0.35,
+                      fill="white", outline="")
+
+        # Beak (orange triangle, pointing right)
+        c.create_polygon(
+            hx + hr * 0.75, hy + hr * 0.05,
+            hx + hr * 1.7, hy + hr * 0.15,
+            hx + hr * 0.75, hy + hr * 0.4,
+            fill=ORANGE, outline=""
+        )
+
+        # Tail feathers (extending left from body)
+        c.create_polygon(
+            bx - bw * 0.35, by,
+            bx - bw * 2.4, by - bh * 0.15,
+            bx - bw * 2.2, by + bh * 0.12,
+            bx - bw * 0.35, by + bh * 0.12,
+            fill="white", outline="", smooth=True
+        )
+
+        # Legs on branch
+        leg_w = max(1, s * 0.010)
+        foot_y = branch_y - 1
+        c.create_line(bx - s * 0.022, by + bh * 0.65, bx - s * 0.028, foot_y,
+                      fill="#5C3118", width=leg_w, capstyle="round")
+        c.create_line(bx + s * 0.022, by + bh * 0.65, bx + s * 0.016, foot_y,
+                      fill="#5C3118", width=leg_w, capstyle="round")
+
+        # Download arrow icon below branch
+        dl_cx = s * 0.50
+        dl_cy = s * 0.77
+        dl_w = max(2, s * 0.018)
+        shaft_h = s * 0.07
+        arrow_w = s * 0.045
+
+        # Arrow shaft (vertical line pointing down)
+        c.create_line(dl_cx, dl_cy - shaft_h, dl_cx, dl_cy + shaft_h * 0.3,
+                      fill="white", width=dl_w, capstyle="round")
+        # Arrowhead (triangle at bottom)
+        c.create_polygon(
+            dl_cx, dl_cy + shaft_h * 0.7,
+            dl_cx - arrow_w, dl_cy,
+            dl_cx + arrow_w, dl_cy,
+            fill="white", outline=""
+        )
+        # Tray line underneath
+        tray_y = dl_cy + shaft_h * 0.85
+        tray_w = s * 0.06
+        c.create_line(dl_cx - tray_w, tray_y, dl_cx + tray_w, tray_y,
+                      fill="white", width=dl_w, capstyle="round")
+
+        return c
+
+    def _apply_tree_theme(self):
+        """Apply Treeview colors for the current appearance mode."""
+        dark = self._is_dark()
+        bg = self._resolve(BG_CARD)
+        fg = "#f0f0f0" if dark else "#1a1a1a"
+        heading_bg = "#3a3a3a" if dark else "#e0e2e5"
+        heading_fg = "#e0e0e0" if dark else "#333333"
+        stripe_bg = self._resolve(STRIPE)
+        sec = self._resolve(TEXT_SEC)
+
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("Dark.Treeview",
+                        background=bg, foreground=fg, fieldbackground=bg,
+                        rowheight=30, borderwidth=0, relief="flat", font=("", 13))
+        style.configure("Dark.Treeview.Heading",
+                        background=heading_bg, foreground=heading_fg,
+                        borderwidth=0, relief="flat", font=("", 13, "bold"))
+        style.map("Dark.Treeview",
+                  background=[("selected", TEAL_DARK)],
+                  foreground=[("selected", "white")])
+        style.layout("Dark.Treeview", [("Dark.Treeview.treearea", {"sticky": "nsew"})])
+
+        if hasattr(self, 'tree'):
+            self.tree.tag_configure("synced", foreground=sec)
+            self.tree.tag_configure("new", foreground=GREEN)
+            self.tree.tag_configure("stripe", background=stripe_bg)
+            self.tree.tag_configure("video_type", foreground="#5B9BD5")
+            self.tree.tag_configure("photo_type", foreground=ORANGE)
+
+    def _update_bird_icons(self):
+        """Redraw bird canvases after appearance change."""
+        # The canvases are recreated with the frames, so just force redraw
+        if hasattr(self, '_bird_canvases'):
+            for canvas_info in self._bird_canvases:
+                canvas_info['canvas'].destroy()
+                new_c = self._create_bird_canvas(canvas_info['parent'], canvas_info['size'])
+                new_c.pack(pady=canvas_info.get('pady', (0, 16)))
+                canvas_info['canvas'] = new_c
+
     def _build_ui(self):
+        self._bird_canvases = []
         self.grid_rowconfigure(2, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
         # --- Accent strip ---
-        accent = ctk.CTkFrame(self, height=4, fg_color=TEAL, corner_radius=0)
-        accent.grid(row=0, column=0, sticky="ew")
+        self.accent_strip = ctk.CTkFrame(self, height=4, fg_color=TEAL, corner_radius=0)
+        self.accent_strip.grid(row=0, column=0, sticky="ew")
 
         # --- Header ---
         header = ctk.CTkFrame(self, fg_color=BG_HEADER, corner_radius=0)
@@ -690,8 +892,8 @@ class HumDropApp(ctk.CTk):
                                           hover_color=TEAL_HOVER, command=self._connect)
         self.connect_btn.pack(pady=(0, 4))
 
-        ctk.CTkButton(btn_frame, text="About", width=100, fg_color="transparent",
-                      border_width=1, border_color=TEXT_SEC, hover_color=BG_CARD,
+        ctk.CTkButton(btn_frame, text="About", width=100, fg_color=TEAL,
+                      hover_color=TEAL_HOVER,
                       command=self._show_about).pack()
 
         # IP row
@@ -706,7 +908,7 @@ class HumDropApp(ctk.CTk):
         self.ip_entry.insert(0, self.camera.camera_ip)
 
         self.find_btn = ctk.CTkButton(ip_frame, text="Find", width=50, height=28,
-                                       fg_color=BG_CARD, hover_color=TEXT_MUTED,
+                                       fg_color=TEAL, hover_color=TEAL_HOVER,
                                        command=self._find_camera)
         self.find_btn.pack(side="left", padx=(0, 10))
 
@@ -748,7 +950,10 @@ class HumDropApp(ctk.CTk):
         inner = ctk.CTkFrame(self.instruction_frame, fg_color="transparent")
         inner.place(relx=0.5, rely=0.4, anchor="center")
 
-        ctk.CTkLabel(inner, text="\U0001F426", font=ctk.CTkFont(size=48)).pack(pady=(0, 16))
+        bird_c = self._create_bird_canvas(inner, size=120)
+        bird_c.pack(pady=(0, 16))
+        self._bird_canvases.append({'canvas': bird_c, 'parent': inner, 'size': 120, 'pady': (0, 16)})
+
         ctk.CTkLabel(inner, text="To get started:\n\n"
                      "1.  Open the camera app on your phone\n"
                      "2.  Start the camera stream\n"
@@ -785,27 +990,17 @@ class HumDropApp(ctk.CTk):
                       fg_color=BG_CARD, hover_color=TEXT_MUTED,
                       command=self._select_new).pack(side="left")
 
-        # Table (ttk.Treeview with dark styling)
-        table_frame = ctk.CTkFrame(f, fg_color=BG_CARD, corner_radius=8)
-        table_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=(8, 0))
-        table_frame.grid_rowconfigure(0, weight=1)
-        table_frame.grid_columnconfigure(0, weight=1)
+        # Table (ttk.Treeview with themed styling)
+        self.table_frame = ctk.CTkFrame(f, fg_color=BG_CARD, corner_radius=8,
+                                         border_width=0)
+        self.table_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=(8, 0))
+        self.table_frame.grid_rowconfigure(0, weight=1)
+        self.table_frame.grid_columnconfigure(0, weight=1)
 
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("Dark.Treeview",
-                        background=BG_CARD, foreground="white", fieldbackground=BG_CARD,
-                        rowheight=30, borderwidth=0, relief="flat", font=("", 13))
-        style.configure("Dark.Treeview.Heading",
-                        background="#383838", foreground="#e0e0e0",
-                        borderwidth=0, relief="flat", font=("", 13, "bold"))
-        style.map("Dark.Treeview",
-                  background=[("selected", TEAL_DARK)],
-                  foreground=[("selected", "white")])
-        style.layout("Dark.Treeview", [("Dark.Treeview.treearea", {"sticky": "nsew"})])
+        self._apply_tree_theme()
 
         cols = ("check", "camera", "saveas", "size", "type", "status")
-        self.tree = ttk.Treeview(table_frame, columns=cols, show="headings",
+        self.tree = ttk.Treeview(self.table_frame, columns=cols, show="headings",
                                  style="Dark.Treeview", selectmode="none")
 
         self.tree.heading("check", text="")
@@ -822,13 +1017,10 @@ class HumDropApp(ctk.CTk):
         self.tree.column("type", width=55, minwidth=45, stretch=False, anchor="w")
         self.tree.column("status", width=65, minwidth=50, stretch=False, anchor="w")
 
-        self.tree.tag_configure("new", foreground=GREEN)
-        self.tree.tag_configure("synced", foreground=TEXT_SEC)
-        self.tree.tag_configure("video_type", foreground="#5B9BD5")
-        self.tree.tag_configure("photo_type", foreground="#ED7D31")
-        self.tree.tag_configure("stripe", background="#2f2f2f")
+        # Apply tag colors now that tree exists
+        self._apply_tree_theme()
 
-        scrollbar = ctk.CTkScrollbar(table_frame, command=self.tree.yview)
+        scrollbar = ctk.CTkScrollbar(self.table_frame, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
         self.tree.grid(row=0, column=0, sticky="nsew", padx=(4, 0), pady=4)
         scrollbar.grid(row=0, column=1, sticky="ns", padx=(0, 4), pady=4)
@@ -865,7 +1057,7 @@ class HumDropApp(ctk.CTk):
         self.openfolder_btn.grid(row=0, column=2, sticky="e")
 
         # Separator
-        sep = ctk.CTkFrame(f, height=1, fg_color=TEXT_MUTED)
+        sep = ctk.CTkFrame(f, height=1, fg_color=BORDER)
         sep.grid(row=6, column=0, sticky="ew", padx=20, pady=(12, 0))
 
         # Naming config
@@ -879,7 +1071,7 @@ class HumDropApp(ctk.CTk):
         self.scheme_menu = ctk.CTkOptionMenu(
             naming_frame, values=scheme_values, variable=self.scheme_var,
             width=280, height=30, font=ctk.CTkFont(size=13),
-            fg_color=BG_CARD, button_color=TEXT_MUTED, button_hover_color=TEAL_DARK,
+            fg_color=BG_CARD, button_color=ORANGE, button_hover_color=ORANGE_HOVER,
             command=self._scheme_changed
         )
         self.scheme_menu.pack(side="left", padx=(8, 0))
@@ -909,14 +1101,14 @@ class HumDropApp(ctk.CTk):
         bottom_frame.grid_columnconfigure(1, weight=1)
 
         self.clean_btn = ctk.CTkButton(bottom_frame, text="Delete Downloaded from Camera", width=240, height=32,
-                                        fg_color="transparent", border_width=1, border_color=TEXT_SEC,
+                                        fg_color="transparent", border_width=1, border_color=BORDER,
                                         hover_color=BG_CARD, font=ctk.CTkFont(size=13),
                                         command=self._clean)
         self.clean_btn.grid(row=0, column=0, sticky="w")
 
         self.wipe_btn = ctk.CTkButton(bottom_frame, text="Wipe All Camera Files", width=180, height=32,
                                        fg_color="transparent", border_width=1, border_color=RED,
-                                       text_color=RED, hover_color="#3a1515",
+                                       text_color=RED, hover_color=("#ffe0de", "#3a1515"),
                                        font=ctk.CTkFont(size=13),
                                        command=self._wipe)
         self.wipe_btn.grid(row=0, column=2, sticky="e")
@@ -926,15 +1118,44 @@ class HumDropApp(ctk.CTk):
     def _show_disconnected(self):
         self.files_frame.grid_forget()
         self.instruction_frame.grid(row=0, column=0, sticky="nsew")
+        self.accent_strip.configure(fg_color=TEAL)
+        self.table_frame.configure(border_width=0)
 
     def _show_connected(self):
         self.instruction_frame.grid_forget()
         self.files_frame.grid(row=0, column=0, sticky="nsew")
+        self.accent_strip.configure(fg_color=ORANGE)
+        self.table_frame.configure(border_width=2, border_color=ORANGE)
 
     def _update_status(self, text: str, connected: Optional[bool] = None):
         self.status_label.configure(text=text)
         if connected is not None:
             self.status_dot.configure(text_color=GREEN if connected else RED)
+
+    def _start_connect_spinner(self):
+        """Show an animated spinner on the instruction overlay during connect."""
+        if not hasattr(self, '_spinner_label'):
+            self._spinner_label = ctk.CTkLabel(
+                self.instruction_frame, text="",
+                font=ctk.CTkFont(size=14), text_color=TEAL
+            )
+        self._spinner_label.place(relx=0.5, rely=0.72, anchor="center")
+        self._spinner_frames = ["Connecting ●○○", "Connecting ○●○", "Connecting ○○●"]
+        self._spinner_idx = 0
+        self._spinner_running = True
+        self._animate_spinner()
+
+    def _animate_spinner(self):
+        if not self._spinner_running:
+            return
+        self._spinner_label.configure(text=self._spinner_frames[self._spinner_idx])
+        self._spinner_idx = (self._spinner_idx + 1) % len(self._spinner_frames)
+        self.after(400, self._animate_spinner)
+
+    def _stop_connect_spinner(self):
+        self._spinner_running = False
+        if hasattr(self, '_spinner_label'):
+            self._spinner_label.place_forget()
 
     def _short_path(self, path: Path) -> str:
         home = str(Path.home())
@@ -1028,7 +1249,8 @@ class HumDropApp(ctk.CTk):
 
         self._sync_ip()
         self.connect_btn.configure(state="disabled")
-        self._update_status("Connecting...")
+        self._update_status("Connecting...", connected=None)
+        self._start_connect_spinner()
 
         def do_connect():
             reachable = self.camera.is_reachable()
@@ -1042,6 +1264,7 @@ class HumDropApp(ctk.CTk):
         threading.Thread(target=do_connect, daemon=True).start()
 
     def _connect_failed(self):
+        self._stop_connect_spinner()
         self.connect_btn.configure(state="normal")
         self._update_status("Not found", connected=False)
         messagebox.showwarning("Camera Not Found",
@@ -1051,6 +1274,7 @@ class HumDropApp(ctk.CTk):
                                "3. The camera is powered on")
 
     def _connect_success(self):
+        self._stop_connect_spinner()
         self.is_connected = True
         self.connect_btn.configure(state="normal", text="Disconnect")
         self._update_status("Connected", connected=True)
@@ -1061,7 +1285,15 @@ class HumDropApp(ctk.CTk):
         if not self.is_connected:
             return
         self.refresh_btn.configure(state="disabled")
-        self._update_status("Scanning...")
+        self.download_btn.configure(state="disabled")
+        self._update_status("Scanning camera...")
+
+        # Show indeterminate progress bar while scanning
+        self.progress_bar.configure(mode="indeterminate")
+        self.progress_bar.grid(row=3, column=0, sticky="ew", padx=20, pady=(8, 0))
+        self.progress_bar.start()
+        self.progress_label.configure(text="Scanning camera for files\u2026")
+        self.progress_label.grid(row=4, column=0, sticky="w", padx=20, pady=(2, 0))
 
         def do_refresh():
             found = self.camera.list_files()
@@ -1070,10 +1302,18 @@ class HumDropApp(ctk.CTk):
         threading.Thread(target=do_refresh, daemon=True).start()
 
     def _refresh_done(self, found: List[CameraFile]):
+        # Stop the scanning progress bar
+        self.progress_bar.stop()
+        self.progress_bar.configure(mode="determinate")
+        self.progress_bar.set(0)
+        self.progress_bar.grid_forget()
+        self.progress_label.grid_forget()
+
         self.files = found
         self._refresh_table()
         self._update_summary()
         self.refresh_btn.configure(state="normal")
+        self.download_btn.configure(state="normal")
         self._update_status("Connected (no files found)" if not found else "Connected", connected=True)
 
     def _download(self):
@@ -1300,13 +1540,15 @@ class HumDropApp(ctk.CTk):
     def _show_about(self):
         about = ctk.CTkToplevel(self)
         about.title("About HumDrop")
-        about.geometry("360x340")
+        about.geometry("380x380")
         about.resizable(False, False)
         about.transient(self)
         about.grab_set()
 
-        ctk.CTkLabel(about, text="\U0001F426", font=ctk.CTkFont(size=40)).pack(pady=(20, 0))
-        ctk.CTkLabel(about, text="HumDrop", font=ctk.CTkFont(size=22, weight="bold")).pack(pady=(4, 0))
+        bird_c = self._create_bird_canvas(about, size=80)
+        bird_c.pack(pady=(20, 0))
+
+        ctk.CTkLabel(about, text="HumDrop", font=ctk.CTkFont(size=22, weight="bold")).pack(pady=(8, 0))
         ctk.CTkLabel(about, text="v0.05", font=ctk.CTkFont(size=13), text_color=TEXT_SEC).pack()
         ctk.CTkLabel(about, text="By Kenneth Russell DeGraff",
                      font=ctk.CTkFont(size=13)).pack(pady=(8, 0))
@@ -1318,11 +1560,11 @@ class HumDropApp(ctk.CTk):
                      font=ctk.CTkFont(family="Courier", size=12), text_color=TEXT_SEC).pack()
 
         kofi_btn = ctk.CTkButton(about, text="Support on Ko-fi", width=140, height=30,
-                                  fg_color=TEAL, hover_color=TEAL_HOVER,
+                                  fg_color=ORANGE, hover_color=ORANGE_HOVER,
                                   command=lambda: webbrowser.open("https://ko-fi.com/fe2_o3"))
         kofi_btn.pack(pady=(16, 0))
 
-        ctk.CTkButton(about, text="OK", width=80, fg_color=BG_CARD, hover_color=TEXT_MUTED,
+        ctk.CTkButton(about, text="OK", width=80, fg_color=TEAL, hover_color=TEAL_HOVER,
                       command=about.destroy).pack(pady=(12, 0))
 
     def _on_close(self):
