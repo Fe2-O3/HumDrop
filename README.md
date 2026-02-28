@@ -39,6 +39,21 @@ humdrop
 
 Builds from source &mdash; no Gatekeeper warning on macOS, no hassle on Linux.
 
+### curl (macOS &amp; Linux &mdash; no Gatekeeper)
+
+```bash
+# macOS
+curl -sL https://github.com/Fe2-O3/HumDrop/releases/latest/download/HumDrop-macOS.zip -o /tmp/HumDrop.zip \
+  && unzip -o /tmp/HumDrop.zip -d /Applications && rm /tmp/HumDrop.zip \
+  && xattr -cr /Applications/HumDrop.app && open /Applications/HumDrop.app
+
+# Linux
+curl -sL https://github.com/Fe2-O3/HumDrop/releases/latest/download/HumDrop-Linux.tar.gz | tar -xz -C ~/
+~/HumDrop/HumDrop
+```
+
+Downloads, installs, and strips the quarantine flag &mdash; app opens with no Gatekeeper warning.
+
 ### Direct Download
 
 | Platform | Download | Run |
