@@ -236,7 +236,7 @@ class CameraManager:
         except (FileNotFoundError, json.JSONDecodeError):
             return []
 
-    # --- Camera Profiles ---
+    # --- Camera Presets ---
 
     def _profiles_path(self) -> Path:
         return self._settings_path().parent / "profiles.json"
@@ -1137,7 +1137,7 @@ class HumDropApp(ctk.CTk):
         ctk.CTkButton(small_btns, text="History", width=48, height=26,
                       fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI,
                       font=ctk.CTkFont(size=13), command=self._show_history).pack(side="left", padx=(0, 4))
-        ctk.CTkButton(small_btns, text="Profiles", width=48, height=26,
+        ctk.CTkButton(small_btns, text="Presets", width=48, height=26,
                       fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI,
                       font=ctk.CTkFont(size=13), command=self._show_profiles).pack(side="left")
 
@@ -1369,8 +1369,10 @@ class HumDropApp(ctk.CTk):
         # Naming config
         naming_frame = ctk.CTkFrame(f, fg_color="transparent")
         naming_frame.grid(row=8, column=0, sticky="ew", padx=20, pady=(8, 0))
+        naming_frame.grid_columnconfigure(1, weight=0)
 
-        ctk.CTkLabel(naming_frame, text="Naming", font=ctk.CTkFont(size=16, weight="bold")).pack(side="left")
+        ctk.CTkLabel(naming_frame, text="Naming", font=ctk.CTkFont(size=16, weight="bold")).grid(
+            row=0, column=0, sticky="w")
 
         scheme_values = [f"{s.display_name}  ({s.example(self.camera.naming_prefix, self.camera.naming_separator)})" for s in NamingScheme]
         self.scheme_var = ctk.StringVar(value=scheme_values[list(NamingScheme).index(self.camera.naming_scheme)])
@@ -1379,13 +1381,13 @@ class HumDropApp(ctk.CTk):
             width=320, height=34, font=ctk.CTkFont(size=16),
             fg_color=BTN_SEC, text_color=TEXT_PRI,
             button_color=ORANGE, button_hover_color=ORANGE_HOVER,
-            command=self._scheme_changed
+            command=self._scheme_changed, dynamic_resizing=False
         )
-        self.scheme_menu.pack(side="left", padx=(8, 0))
+        self.scheme_menu.grid(row=0, column=1, padx=(8, 0), sticky="w")
 
-        # Separator radio buttons (underscore vs space)
+        # Separator radio buttons (underscore vs space) — same row, right of dropdown
         sep_frame = ctk.CTkFrame(naming_frame, fg_color="transparent")
-        sep_frame.pack(side="left", padx=(12, 0))
+        sep_frame.grid(row=0, column=2, padx=(12, 0), sticky="w")
 
         self.sep_var = ctk.StringVar(value=self.camera.naming_separator)
 
@@ -1913,13 +1915,10 @@ class HumDropApp(ctk.CTk):
         # Disable all action buttons since nothing works without connection
         self._disable_buttons()
 
-        # Clear file state and storage display
+        # Clear file state (keep storage info visible as last-known data)
         self.files = []
         self._refresh_table()
         self._update_summary()
-        self.storage_label.configure(text="")
-        if hasattr(self, 'storage_canvas'):
-            self.storage_canvas.delete("all")
 
         # Notify user
         self._send_notification("HumDrop", "Connection lost")
@@ -2299,15 +2298,15 @@ class HumDropApp(ctk.CTk):
 
     def _show_profiles(self):
         dlg = ctk.CTkToplevel(self)
-        dlg.title("Camera Profiles")
+        dlg.title("Camera Presets")
         dlg.geometry("400x360")
         dlg.resizable(False, False)
         dlg.transient(self)
         dlg.grab_set()
 
-        ctk.CTkLabel(dlg, text="Camera Profiles", font=ctk.CTkFont(size=18, weight="bold")).pack(
+        ctk.CTkLabel(dlg, text="Camera Presets", font=ctk.CTkFont(size=18, weight="bold")).pack(
             padx=16, pady=(12, 4))
-        ctk.CTkLabel(dlg, text="Save and switch between camera configurations",
+        ctk.CTkLabel(dlg, text="Save and switch between camera & settings configurations",
                      font=ctk.CTkFont(size=14), text_color=TEXT_SEC).pack(padx=16)
 
         profiles = self.camera.load_profiles()
@@ -2348,7 +2347,7 @@ class HumDropApp(ctk.CTk):
         btn_frame.pack(pady=(8, 12))
 
         def save_current():
-            name = ctk.CTkInputDialog(text="Profile name:", title="Save Profile").get_input()
+            name = ctk.CTkInputDialog(text="Preset name:", title="Save Preset").get_input()
             if name and name.strip():
                 self.camera.save_profile(name.strip())
                 refresh_list()
@@ -2366,7 +2365,7 @@ class HumDropApp(ctk.CTk):
                 self._update_scheme_menu()
                 self._update_example()
                 dlg.destroy()
-                messagebox.showinfo("Profile Loaded", f"Switched to profile: {name}")
+                messagebox.showinfo("Preset Loaded", f"Switched to preset: {name}")
 
         ctk.CTkButton(btn_frame, text="Save Current", width=120, height=34,
                       fg_color=TEAL, hover_color=TEAL_HOVER, text_color="white",
