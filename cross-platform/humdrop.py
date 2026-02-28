@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HumDrop v0.08 — Cross-platform camera sync utility
+HumDrop v0.081 — Cross-platform camera sync utility
 By Kenneth Russell DeGraff
 
 Syncs videos and photos from WiFi-enabled trail/bird cameras.
@@ -46,13 +46,13 @@ class NamingScheme(Enum):
     @property
     def display_name(self):
         return {
-            NamingScheme.PREFIX_DATE: "custom_date_seq",
-            NamingScheme.TIMESTAMP_FULL: "CUSTOM_timestamp",
-            NamingScheme.DATE_PREFIX: "date_time_custom",
-            NamingScheme.DATE_SEQ_CUSTOM: "date_seq_custom",
-            NamingScheme.CUSTOM_SEQ: "custom_seq",
-            NamingScheme.SEQ_CUSTOM: "seq_custom",
-            NamingScheme.ORIGINAL: "Camera original",
+            NamingScheme.PREFIX_DATE: "Custom · Date · Seq",
+            NamingScheme.TIMESTAMP_FULL: "Custom · Timestamp",
+            NamingScheme.DATE_PREFIX: "Date · Time · Custom",
+            NamingScheme.DATE_SEQ_CUSTOM: "Date · Seq · Custom",
+            NamingScheme.CUSTOM_SEQ: "Custom · Seq",
+            NamingScheme.SEQ_CUSTOM: "Seq · Custom",
+            NamingScheme.ORIGINAL: "Camera Original",
         }[self]
 
     def example(self, prefix: str, sep: str = "_") -> str:
@@ -1160,16 +1160,16 @@ class HumDropApp(ctk.CTk):
 
         # Status dot + label
         self.status_dot = ctk.CTkLabel(ip_frame, text="\u25CF", font=ctk.CTkFont(size=18),
-                                        text_color=RED, width=18)
-        self.status_dot.pack(side="left")
+                                        text_color=RED, width=24)
+        self.status_dot.pack(side="left", padx=(6, 0))
 
         self.status_label = ctk.CTkLabel(ip_frame, text="Disconnected", font=ctk.CTkFont(size=16),
                                           text_color=TEXT_SEC)
-        self.status_label.pack(side="left", padx=(4, 0))
+        self.status_label.pack(side="left", padx=(2, 0))
 
         # Folder row
         folder_frame = ctk.CTkFrame(header, fg_color="transparent")
-        folder_frame.grid(row=2, column=0, columnspan=3, sticky="ew", padx=20, pady=(6, 12))
+        folder_frame.grid(row=2, column=0, columnspan=3, sticky="ew", padx=20, pady=(6, 2))
         folder_frame.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(folder_frame, text="Save to:", font=ctk.CTkFont(size=16),
@@ -1192,7 +1192,7 @@ class HumDropApp(ctk.CTk):
 
         # --- Persistent storage bar (always visible, below header) ---
         self.storage_frame = ctk.CTkFrame(self, fg_color="transparent", height=24)
-        self.storage_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(4, 0))
+        self.storage_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 0))
         self.storage_frame.grid_propagate(True)
 
         self.storage_label = ctk.CTkLabel(self.storage_frame, text="", font=ctk.CTkFont(size=14),
@@ -1338,35 +1338,35 @@ class HumDropApp(ctk.CTk):
         opts_frame.grid(row=6, column=0, sticky="ew", padx=24, pady=(6, 0))
 
         self.auto_delete_cb = ctk.CTkCheckBox(
-            opts_frame, text="Auto-delete from camera after download",
+            opts_frame, text="Auto-delete from camera",
             variable=self.auto_delete_var,
             font=ctk.CTkFont(size=16), text_color=TEXT_SEC,
             fg_color=TEAL, hover_color=TEAL_HOVER,
             border_color=BORDER, checkmark_color="white"
         )
-        self.auto_delete_cb.pack(anchor="w")
+        self.auto_delete_cb.pack(side="left", padx=(0, 16))
 
         self.date_subfolder_var = ctk.BooleanVar(value=self.camera.date_subfolders)
         self.date_subfolder_cb = ctk.CTkCheckBox(
-            opts_frame, text="Organize downloads into date subfolders",
+            opts_frame, text="Date subfolders",
             variable=self.date_subfolder_var,
             font=ctk.CTkFont(size=16), text_color=TEXT_SEC,
             fg_color=TEAL, hover_color=TEAL_HOVER,
             border_color=BORDER, checkmark_color="white",
             command=self._toggle_date_subfolders
         )
-        self.date_subfolder_cb.pack(anchor="w", pady=(4, 0))
+        self.date_subfolder_cb.pack(side="left", padx=(0, 16))
 
         self.auto_open_var = ctk.BooleanVar(value=self.camera.auto_open_folder)
         self.auto_open_cb = ctk.CTkCheckBox(
-            opts_frame, text="Open folder after download",
+            opts_frame, text="Open folder when done",
             variable=self.auto_open_var,
             font=ctk.CTkFont(size=16), text_color=TEXT_SEC,
             fg_color=TEAL, hover_color=TEAL_HOVER,
             border_color=BORDER, checkmark_color="white",
             command=self._toggle_auto_open
         )
-        self.auto_open_cb.pack(anchor="w", pady=(4, 0))
+        self.auto_open_cb.pack(side="left")
 
         # Separator
         sep = ctk.CTkFrame(f, height=1, fg_color=BORDER)
@@ -2162,7 +2162,7 @@ class HumDropApp(ctk.CTk):
                 total = fmt(info["total"])
                 pct = info["used"] / info["total"] * 100 if info["total"] else 0
                 t = datetime.now()
-                now = f"{t.hour % 12 or 12}:{t.minute:02d} {'PM' if t.hour >= 12 else 'AM'}"
+                now = f"{t.hour % 12 or 12}:{t.minute:02d} {'PM' if t.hour >= 12 else 'AM'} {t.month}/{t.day}/{str(t.year)[2:]}"
                 def update_ui():
                     self.storage_label.configure(
                         text=f"Storage: {used} used / {free} free / {total} total ({pct:.0f}%)")
@@ -2505,7 +2505,7 @@ class HumDropApp(ctk.CTk):
         ctk.CTkLabel(banner_inner, text="HumDrop",
                      font=ctk.CTkFont(size=26, weight="bold"),
                      text_color="white").pack(pady=(2, 0))
-        ctk.CTkLabel(banner_inner, text="v0.08  \u2022  Camera Sync",
+        ctk.CTkLabel(banner_inner, text="v0.081  \u2022  Camera Sync",
                      font=ctk.CTkFont(size=15),
                      text_color=TEAL_HOVER).pack()
 

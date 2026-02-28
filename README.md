@@ -60,13 +60,13 @@ python humdrop.py
 ### Organize
 
 - **7 naming schemes** with live preview:
-  - `custom_date_seq` &mdash; BirdCam_2026-01-31_001.mp4
-  - `CUSTOM_timestamp` &mdash; BIR_20260131_140144.mp4
-  - `date_time_custom` &mdash; 2026-01-31_14-01_BirdCam.mp4
-  - `date_seq_custom` &mdash; 2026-01-31_001_BirdCam.mp4
-  - `custom_seq` &mdash; BirdCam_001.mp4
-  - `seq_custom` &mdash; 001_BirdCam.mp4
-  - `Camera original` &mdash; SCKR1000.mp4 (with collision warning)
+  - `Custom · Date · Seq` &mdash; BirdCam_2026-01-31_001.mp4
+  - `Custom · Timestamp` &mdash; BIR_20260131_140144.mp4
+  - `Date · Time · Custom` &mdash; 2026-01-31_14-01_BirdCam.mp4
+  - `Date · Seq · Custom` &mdash; 2026-01-31_001_BirdCam.mp4
+  - `Custom · Seq` &mdash; BirdCam_001.mp4
+  - `Seq · Custom` &mdash; 001_BirdCam.mp4
+  - `Camera Original` &mdash; SCKR1000.mp4 (with collision warning)
 - **Underscore or space separator** &mdash; toggle between `BirdCam_001` and `BirdCam 001`
 - **Custom prefix** &mdash; type anything (capitals, spaces allowed)
 - **Date subfolders** &mdash; auto-organize into `YYYY-MM-DD/` directories
