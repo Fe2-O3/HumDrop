@@ -30,34 +30,33 @@ HumDrop connects directly to the camera over your local WiFi and pulls the **ori
 
 ## Install
 
-### macOS &mdash; one command
+### macOS
 
-Open **Terminal** and paste:
-
-```bash
-curl -sL https://github.com/Fe2-O3/HumDrop/releases/latest/download/HumDrop-macOS.zip -o /tmp/HumDrop.zip \
-  && unzip -o /tmp/HumDrop.zip -d /Applications && rm /tmp/HumDrop.zip \
-  && xattr -cr /Applications/HumDrop.app && open /Applications/HumDrop.app
-```
-
-Downloads, installs to Applications, strips the Gatekeeper quarantine flag, and opens the app. No warnings.
-
-### Linux &mdash; one command
+> Open **Terminal** (press `Cmd + Space`, type `Terminal`, hit Enter), then copy and paste:
 
 ```bash
-curl -sL https://github.com/Fe2-O3/HumDrop/releases/latest/download/HumDrop-Linux.tar.gz | tar -xz -C ~/
-~/HumDrop/HumDrop
+curl -sL https://github.com/Fe2-O3/HumDrop/releases/latest/download/HumDrop-macOS.zip -o /tmp/HumDrop.zip && unzip -o /tmp/HumDrop.zip -d /Applications && rm /tmp/HumDrop.zip && xattr -cr /Applications/HumDrop.app && open /Applications/HumDrop.app
 ```
 
-### Windows &mdash; one command
+Installs to Applications, removes the Gatekeeper quarantine flag, and opens the app. No security warnings.
 
-Open **PowerShell** and paste:
+### Windows
+
+> Open **PowerShell** (press `Win + X`, click **Terminal** or **PowerShell**), then copy and paste:
 
 ```powershell
 curl.exe -sLo $env:TEMP\HumDrop.zip https://github.com/Fe2-O3/HumDrop/releases/latest/download/HumDrop-Windows.zip; New-Item -Force -ItemType Directory "$env:USERPROFILE\Desktop\HumDrop" | Out-Null; tar -xf $env:TEMP\HumDrop.zip -C "$env:USERPROFILE\Desktop\HumDrop"; Remove-Item $env:TEMP\HumDrop.zip; & "$env:USERPROFILE\Desktop\HumDrop\HumDrop.exe"
 ```
 
-Downloads to your Desktop and runs it. Uses `curl.exe` + `tar` which don't add the "Mark of the Web" &mdash; no SmartScreen warning.
+Installs to your Desktop and runs it. No SmartScreen warning (`curl.exe` + `tar` don't add the Mark of the Web).
+
+### Linux
+
+> Open a terminal, then copy and paste:
+
+```bash
+curl -sL https://github.com/Fe2-O3/HumDrop/releases/latest/download/HumDrop-Linux.tar.gz | tar -xz -C ~ && ~/HumDrop/HumDrop
+```
 
 ### Homebrew (macOS &amp; Linux)
 
@@ -68,7 +67,7 @@ brew install Fe2-O3/tap/humdrop
 humdrop
 ```
 
-Don't have Homebrew? Install it first with:
+Don't have Homebrew? Install it first:
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
@@ -150,10 +149,9 @@ Plus:
 
 | Camera | Status |
 |--------|--------|
-| [Hibird 4K](https://hibird.com) (all models) | Confirmed |
-| [Hibird DIY](https://hibird.com) (BK800 + SP700) | Confirmed |
+| [Hibird 4K Bird Camera with Solar Power](https://hibird.com) | Confirmed |
 
-HumDrop works with WiFi cameras that expose a telnet server (port 23) and busybox HTTP file server (port 8080). This includes most **Hibird/Camojojo** bird cameras and potentially other trail cameras with similar firmware.
+HumDrop works with WiFi cameras that expose a telnet server (port 23) and busybox HTTP file server (port 8080). Other **Hibird/Camojojo** bird cameras and trail cameras with similar firmware may also work.
 
 > **Got a camera that works?** [Let us know.](../../issues/new?title=Camera+compatibility&body=Camera+model:+%0APlatform:+%0ANotes:+)
 
@@ -173,18 +171,20 @@ The app is not code-signed. On first launch:
 
 Or use [Sentinel](https://github.com/alienator88/Sentinel) to remove the quarantine flag before opening &mdash; a free, open-source tool that makes managing unsigned apps easy.
 
-**Tip:** Installing via Homebrew (`brew install Fe2-O3/tap/humdrop`) avoids this entirely.
+**Tip:** Installing via the curl command or Homebrew avoids this entirely.
 
 </details>
 
 <details>
-<summary><strong>Windows</strong> &mdash; SmartScreen warning (one-time)</summary>
+<summary><strong>Windows</strong> &mdash; SmartScreen warning (one-time, direct download only)</summary>
 
 Windows Defender SmartScreen may flag the executable (common for PyInstaller apps, not a real threat):
 
 1. Click **"More info"**
 2. Click **"Run anyway"**
 3. If your firewall prompts for network access, click **Allow** &mdash; HumDrop needs local network access to reach the camera
+
+**Tip:** Installing via the PowerShell command above avoids this entirely.
 
 </details>
 
@@ -193,37 +193,7 @@ Windows Defender SmartScreen may flag the executable (common for PyInstaller app
 
 Requires a desktop environment (GNOME, KDE, Xfce, etc.). Notifications use `notify-send` if available.
 
-```bash
-tar -xzf HumDrop-Linux.tar.gz
-cd HumDrop
-./HumDrop
-```
-
 </details>
-
----
-
-## How It Works
-
-```
-You                         HumDrop                        Camera
- |                            |                              |
- |  Click "Connect"           |                              |
- |--------------------------->|  Telnet (port 23)            |
- |                            |----------------------------->|
- |                            |  Start HTTP server           |
- |                            |----------------------------->|
- |                            |  List /mnt/mmc/DCIM/         |
- |                            |<-----------------------------|
- |  See files, click Download |                              |
- |--------------------------->|  HTTP GET each file (8080)   |
- |                            |<-----------------------------|
- |                            |  Rename + save to disk       |
- |  Done! Files on your       |                              |
- |  computer at full 4K       |                              |
-```
-
-The camera's phone app caps transfers at 1080p. HumDrop bypasses the app entirely and pulls raw files from the camera's SD card over HTTP.
 
 ---
 
