@@ -49,9 +49,15 @@ curl -sL https://github.com/Fe2-O3/HumDrop/releases/latest/download/HumDrop-Linu
 ~/HumDrop/HumDrop
 ```
 
-### Windows
+### Windows &mdash; one command
 
-[Download HumDrop-Windows.zip](https://github.com/Fe2-O3/HumDrop/releases/latest) &mdash; extract the folder, run `HumDrop.exe` (see [first launch](#first-launch)).
+Open **PowerShell** and paste:
+
+```powershell
+curl.exe -sLo $env:TEMP\HumDrop.zip https://github.com/Fe2-O3/HumDrop/releases/latest/download/HumDrop-Windows.zip; New-Item -Force -ItemType Directory "$env:USERPROFILE\Desktop\HumDrop" | Out-Null; tar -xf $env:TEMP\HumDrop.zip -C "$env:USERPROFILE\Desktop\HumDrop"; Remove-Item $env:TEMP\HumDrop.zip; & "$env:USERPROFILE\Desktop\HumDrop\HumDrop.exe"
+```
+
+Downloads to your Desktop and runs it. Uses `curl.exe` + `tar` which don't add the "Mark of the Web" &mdash; no SmartScreen warning.
 
 ### Homebrew (macOS &amp; Linux)
 
