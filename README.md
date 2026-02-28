@@ -30,37 +30,51 @@ HumDrop connects directly to the camera over your local WiFi and pulls the **ori
 
 ## Install
 
-### macOS &amp; Linux &mdash; Homebrew (recommended)
+### macOS &mdash; one command
+
+Open **Terminal** and paste:
+
+```bash
+curl -sL https://github.com/Fe2-O3/HumDrop/releases/latest/download/HumDrop-macOS.zip -o /tmp/HumDrop.zip \
+  && unzip -o /tmp/HumDrop.zip -d /Applications && rm /tmp/HumDrop.zip \
+  && xattr -cr /Applications/HumDrop.app && open /Applications/HumDrop.app
+```
+
+Downloads, installs to Applications, strips the Gatekeeper quarantine flag, and opens the app. No warnings.
+
+### Linux &mdash; one command
+
+```bash
+curl -sL https://github.com/Fe2-O3/HumDrop/releases/latest/download/HumDrop-Linux.tar.gz | tar -xz -C ~/
+~/HumDrop/HumDrop
+```
+
+### Windows
+
+[Download HumDrop-Windows.zip](https://github.com/Fe2-O3/HumDrop/releases/latest) &mdash; extract the folder, run `HumDrop.exe` (see [first launch](#first-launch)).
+
+### Homebrew (macOS &amp; Linux)
+
+If you have [Homebrew](https://brew.sh) installed:
 
 ```bash
 brew install Fe2-O3/tap/humdrop
 humdrop
 ```
 
-Builds from source &mdash; no Gatekeeper warning on macOS, no hassle on Linux.
-
-### curl (macOS &amp; Linux &mdash; no Gatekeeper)
+Don't have Homebrew? Install it first with:
 
 ```bash
-# macOS
-curl -sL https://github.com/Fe2-O3/HumDrop/releases/latest/download/HumDrop-macOS.zip -o /tmp/HumDrop.zip \
-  && unzip -o /tmp/HumDrop.zip -d /Applications && rm /tmp/HumDrop.zip \
-  && xattr -cr /Applications/HumDrop.app && open /Applications/HumDrop.app
-
-# Linux
-curl -sL https://github.com/Fe2-O3/HumDrop/releases/latest/download/HumDrop-Linux.tar.gz | tar -xz -C ~/
-~/HumDrop/HumDrop
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ```
-
-Downloads, installs, and strips the quarantine flag &mdash; app opens with no Gatekeeper warning.
 
 ### Direct Download
 
-| Platform | Download | Run |
-|----------|----------|-----|
-| **macOS** | [HumDrop-macOS.zip](https://github.com/Fe2-O3/HumDrop/releases/latest) | Unzip, open `HumDrop.app` (see [first launch](#first-launch)) |
-| **Windows** | [HumDrop-Windows.zip](https://github.com/Fe2-O3/HumDrop/releases/latest) | Extract folder, run `HumDrop.exe` (see [first launch](#first-launch)) |
-| **Linux** | [HumDrop-Linux.tar.gz](https://github.com/Fe2-O3/HumDrop/releases/latest) | Extract, run `./HumDrop` |
+| Platform | Download |
+|----------|----------|
+| **macOS** | [HumDrop-macOS.zip](https://github.com/Fe2-O3/HumDrop/releases/latest) (see [first launch](#first-launch)) |
+| **Windows** | [HumDrop-Windows.zip](https://github.com/Fe2-O3/HumDrop/releases/latest) (see [first launch](#first-launch)) |
+| **Linux** | [HumDrop-Linux.tar.gz](https://github.com/Fe2-O3/HumDrop/releases/latest) |
 
 ### Run from Source (all platforms)
 
