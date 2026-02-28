@@ -32,7 +32,8 @@ HumDrop connects directly to the camera over your local WiFi and pulls the **ori
 
 ### macOS
 
-> Open **Terminal** (press `Cmd + Space`, type `Terminal`, hit Enter), then copy and paste:
+1. Open **Terminal** &mdash; press `Cmd + Space`, type `Terminal`, hit Enter
+2. 📋 **Copy** the command below and paste it into Terminal:
 
 ```bash
 curl -sL https://github.com/Fe2-O3/HumDrop/releases/latest/download/HumDrop-macOS.zip -o /tmp/HumDrop.zip && unzip -o /tmp/HumDrop.zip -d /Applications && rm /tmp/HumDrop.zip && xattr -cr /Applications/HumDrop.app && open /Applications/HumDrop.app
@@ -42,7 +43,8 @@ Installs to Applications, removes the Gatekeeper quarantine flag, and opens the 
 
 ### Windows
 
-> Open **PowerShell** (press `Win + X`, click **Terminal** or **PowerShell**), then copy and paste:
+1. Open **PowerShell** &mdash; press `Win + X`, click **Terminal** or **PowerShell**
+2. 📋 **Copy** the command below and paste it into PowerShell:
 
 ```powershell
 curl.exe -sLo $env:TEMP\HumDrop.zip https://github.com/Fe2-O3/HumDrop/releases/latest/download/HumDrop-Windows.zip; New-Item -Force -ItemType Directory "$env:USERPROFILE\Desktop\HumDrop" | Out-Null; tar -xf $env:TEMP\HumDrop.zip -C "$env:USERPROFILE\Desktop\HumDrop"; Remove-Item $env:TEMP\HumDrop.zip; & "$env:USERPROFILE\Desktop\HumDrop\HumDrop.exe"
@@ -52,7 +54,8 @@ Installs to your Desktop and runs it. No SmartScreen warning (`curl.exe` + `tar`
 
 ### Linux
 
-> Open a terminal, then copy and paste:
+1. Open a terminal
+2. 📋 **Copy** the command below and paste it:
 
 ```bash
 curl -sL https://github.com/Fe2-O3/HumDrop/releases/latest/download/HumDrop-Linux.tar.gz | tar -xz -C ~ && ~/HumDrop/HumDrop
@@ -151,7 +154,7 @@ Plus:
 |--------|--------|
 | [Hibird 4K Bird Camera with Solar Power](https://hibird.com) | Confirmed |
 
-HumDrop works with WiFi cameras that expose a telnet server (port 23) and busybox HTTP file server (port 8080). Other **Hibird/Camojojo** bird cameras and trail cameras with similar firmware may also work.
+Other **Hibird/Camojojo** bird cameras and trail cameras with similar firmware may also work.
 
 > **Got a camera that works?** [Let us know.](../../issues/new?title=Camera+compatibility&body=Camera+model:+%0APlatform:+%0ANotes:+)
 
