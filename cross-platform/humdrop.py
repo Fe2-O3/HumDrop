@@ -719,6 +719,7 @@ class HumDropApp(ctk.CTk):
         self.is_connected = False
         self.is_downloading = False
         self._download_cancel = False
+        self._heartbeat_running = False
         self.auto_delete_var = ctk.BooleanVar(value=False)
 
         self.title("HumDrop")
@@ -1336,6 +1337,7 @@ class HumDropApp(ctk.CTk):
                 self.is_downloading = False
                 self._re_enable_buttons()
                 self._hide_progress()
+            self._stop_heartbeat()
             self.camera.cleanup()
             self.is_connected = False
             self.files = []
@@ -1376,6 +1378,7 @@ class HumDropApp(ctk.CTk):
         self.connect_btn.configure(state="normal", text="Disconnect")
         self._update_status("Connected", connected=True)
         self._show_connected()
+        self._start_heartbeat()
         self._refresh()
 
     def _refresh(self):
@@ -1392,7 +1395,18 @@ class HumDropApp(ctk.CTk):
         self.progress_label.grid(row=4, column=0, sticky="w", padx=20, pady=(2, 0))
 
         def do_refresh():
-            found = self.camera.list_files()
+            try:
+                found = self.camera.list_files()
+            except Exception as e:
+                self.camera.log(f"[REFRESH] Error: {e}")
+                found = None
+            if found is None:
+                # list_files returned None or raised — check if camera is gone
+                if not self.camera.is_reachable():
+                    self.after(0, lambda: self._handle_disconnect(
+                        "Lost connection during refresh. Click Connect to reconnect."))
+                    return
+                found = []
             self.after(0, lambda: self._refresh_done(found))
 
         threading.Thread(target=do_refresh, daemon=True).start()
@@ -1509,18 +1523,8 @@ class HumDropApp(ctk.CTk):
         self._re_enable_buttons()
 
         if connection_lost:
-            self.progress_bar.set(0)
-            msg = f"Downloaded {total} files before connection was lost."
-            self.progress_label.configure(text=msg)
-            self._update_status("Connection lost", connected=False)
-            self.is_connected = False
-            self.camera.cleanup()
-            self.connect_btn.configure(text="Connect")
-            self.accent_strip.configure(fg_color=TEAL)
-            self.table_frame.configure(border_width=0)
-            self._refresh_table()
-            self._update_summary()
-            self.after(8000, self._hide_progress)
+            self._handle_disconnect(
+                f"Downloaded {total} files before connection was lost.")
         elif auto_deleted > 0:
             # Auto-delete happened — refresh the camera file list
             self.progress_bar.set(1.0)
@@ -1536,9 +1540,16 @@ class HumDropApp(ctk.CTk):
             self.progress_label.configure(text=f"{msg} Refreshing\u2026")
 
             def do_refresh():
-                found = self.camera.list_files()
+                try:
+                    found = self.camera.list_files()
+                except Exception:
+                    found = None
+                if found is None and not self.camera.is_reachable():
+                    self.after(0, lambda: self._handle_disconnect(
+                        f"Downloaded {total}, deleted {auto_deleted}, but lost connection."))
+                    return
                 self.after(0, lambda: self._download_auto_delete_refresh_done(
-                    found, total, auto_deleted))
+                    found or [], total, auto_deleted))
 
             threading.Thread(target=do_refresh, daemon=True).start()
         else:
@@ -1584,6 +1595,62 @@ class HumDropApp(ctk.CTk):
         self.delete_btn.configure(state="disabled")
         self.auto_delete_cb.configure(state="disabled")
 
+    def _handle_disconnect(self, message: str = "Connection lost"):
+        """Centralized disconnect handler — resets UI and allows reconnection."""
+        self.is_connected = False
+        self.is_downloading = False
+        self._download_cancel = True
+        self.camera.cleanup()
+        self._stop_heartbeat()
+
+        # Reset progress UI
+        try:
+            self.progress_bar.stop()
+        except Exception:
+            pass
+        self.progress_bar.configure(mode="determinate")
+        self.progress_bar.set(0)
+        self.progress_label.configure(text=message)
+        self.progress_label.grid(row=4, column=0, sticky="w", padx=20, pady=(2, 0))
+        self.progress_bar.grid_forget()
+
+        # Reset connection UI
+        self._update_status("Disconnected — click Connect to reconnect", connected=False)
+        self.connect_btn.configure(text="Connect", state="normal")
+        self.accent_strip.configure(fg_color=TEAL)
+        self.table_frame.configure(border_width=0)
+        self._re_enable_buttons()
+        self._refresh_table()
+        self._update_summary()
+        self.after(8000, self._hide_progress)
+
+    def _start_heartbeat(self):
+        """Start a periodic check that the camera is still reachable."""
+        self._heartbeat_running = True
+        self._heartbeat_check()
+
+    def _stop_heartbeat(self):
+        self._heartbeat_running = False
+
+    def _heartbeat_check(self):
+        if not self._heartbeat_running or not self.is_connected:
+            return
+        # Don't check during active operations
+        if self.is_downloading:
+            self.after(10000, self._heartbeat_check)
+            return
+
+        def check():
+            reachable = self.camera.is_reachable()
+            if not reachable and self._heartbeat_running and self.is_connected:
+                self.camera.log("[HEARTBEAT] Camera unreachable")
+                self.after(0, lambda: self._handle_disconnect(
+                    "Camera disconnected. Click Connect to reconnect."))
+            elif self._heartbeat_running:
+                self.after(15000, self._heartbeat_check)
+
+        threading.Thread(target=check, daemon=True).start()
+
     def _delete_selected(self):
         """Delete checked/selected files from camera with progress bar."""
         selected = [f for f in self.files if f.selected]
@@ -1607,14 +1674,23 @@ class HumDropApp(ctk.CTk):
         self._update_status(f"{status_prefix}...")
 
         def do_delete():
+            deleted = 0
             for i, f in enumerate(files_to_delete):
                 def update_ui(name=f.name, n=i):
                     self.progress_label.configure(
                         text=f"{status_prefix} {name} ({n + 1}/{total})...")
                     self.progress_bar.set((n + 1) / total)
                 self.after(0, update_ui)
-                self.camera.delete_file(f)
-            self.after(0, lambda: self._delete_done(total))
+                try:
+                    self.camera.delete_file(f)
+                    deleted += 1
+                except Exception as e:
+                    self.camera.log(f"[DELETE] Error deleting {f.name}: {e}")
+                    if not self.camera.is_reachable():
+                        self.after(0, lambda d=deleted: self._handle_disconnect(
+                            f"Connection lost after deleting {d}/{total} files."))
+                        return
+            self.after(0, lambda: self._delete_done(deleted))
 
         threading.Thread(target=do_delete, daemon=True).start()
 
@@ -1629,8 +1705,15 @@ class HumDropApp(ctk.CTk):
         self.progress_bar.start()
 
         def do_refresh():
-            found = self.camera.list_files()
-            self.after(0, lambda: self._delete_refresh_done(found, count))
+            try:
+                found = self.camera.list_files()
+            except Exception:
+                found = None
+            if found is None and not self.camera.is_reachable():
+                self.after(0, lambda: self._handle_disconnect(
+                    f"Deleted {count} files, but lost connection during refresh."))
+                return
+            self.after(0, lambda: self._delete_refresh_done(found or [], count))
 
         threading.Thread(target=do_refresh, daemon=True).start()
 
@@ -1678,7 +1761,14 @@ class HumDropApp(ctk.CTk):
         self.progress_label.grid(row=4, column=0, sticky="w", padx=20, pady=(2, 0))
 
         def do_wipe():
-            self.camera.wipe_all()
+            try:
+                self.camera.wipe_all()
+            except Exception as e:
+                self.camera.log(f"[WIPE] Error: {e}")
+                if not self.camera.is_reachable():
+                    self.after(0, lambda: self._handle_disconnect(
+                        "Connection lost during wipe."))
+                    return
             self.after(0, self._wipe_done)
 
         threading.Thread(target=do_wipe, daemon=True).start()
@@ -1688,8 +1778,15 @@ class HumDropApp(ctk.CTk):
         self._update_status("Refreshing...")
 
         def do_refresh():
-            found = self.camera.list_files()
-            self.after(0, lambda: self._wipe_refresh_done(found))
+            try:
+                found = self.camera.list_files()
+            except Exception:
+                found = None
+            if found is None and not self.camera.is_reachable():
+                self.after(0, lambda: self._handle_disconnect(
+                    "Wipe completed, but lost connection during refresh."))
+                return
+            self.after(0, lambda: self._wipe_refresh_done(found or []))
 
         threading.Thread(target=do_refresh, daemon=True).start()
 
@@ -1782,13 +1879,11 @@ class HumDropApp(ctk.CTk):
             self._refresh()
 
     def _prefix_changed(self):
-        raw = self.prefix_entry.get().strip().lower()
-        raw = raw.replace(" ", "_")
-        raw = re.sub(r'[^a-z0-9_\-]', '', raw)
+        raw = self.prefix_entry.get().strip()
+        # Only strip characters that are truly illegal in filenames
+        raw = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '', raw)
         if not raw:
             raw = "cam"
-        self.prefix_entry.delete(0, "end")
-        self.prefix_entry.insert(0, raw)
         self.camera.naming_prefix = raw
         self.camera.save_settings()
         self._update_scheme_menu()
@@ -1828,7 +1923,7 @@ class HumDropApp(ctk.CTk):
         ctk.CTkLabel(banner_inner, text="HumDrop",
                      font=ctk.CTkFont(size=26, weight="bold"),
                      text_color="white").pack(pady=(2, 0))
-        ctk.CTkLabel(banner_inner, text="v0.05  \u2022  Camera Sync",
+        ctk.CTkLabel(banner_inner, text="v0.06  \u2022  Camera Sync",
                      font=ctk.CTkFont(size=15),
                      text_color=TEAL_HOVER).pack()
 
@@ -1838,7 +1933,7 @@ class HumDropApp(ctk.CTk):
 
         ctk.CTkLabel(body, text="By Kenneth Russell DeGraff",
                      font=ctk.CTkFont(size=16, weight="bold")).pack()
-        ctk.CTkLabel(body, text="Sync videos and photos from WiFi trail cameras\n"
+        ctk.CTkLabel(body, text="Sync videos and photos from WiFi bird/trail cameras\n"
                      "directly to your computer over your local network.",
                      font=ctk.CTkFont(size=15), text_color=TEXT_SEC,
                      justify="center").pack(pady=(6, 0))
@@ -1889,6 +1984,7 @@ class HumDropApp(ctk.CTk):
                       command=about.destroy).pack(pady=(8, 16))
 
     def _on_close(self):
+        self._stop_heartbeat()
         self.camera.cleanup()
         self.destroy()
 
