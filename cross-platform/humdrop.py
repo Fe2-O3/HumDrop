@@ -495,15 +495,19 @@ class CameraManager:
 
     # --- Download ---
 
-    def download_file(self, file: CameraFile, progress_cb: Callable, done_cb: Callable):
+    def download_file(self, file: CameraFile, progress_cb: Callable, done_cb: Callable,
+                      cancel_check: Optional[Callable] = None):
         url = f"http://{self.camera_ip}:{self.http_port}/{file.http_path}"
         dest = self.video_dir / file.local_name
         try:
-            with urllib.request.urlopen(url) as resp:
+            with urllib.request.urlopen(url, timeout=30) as resp:
                 total = int(resp.headers.get("Content-Length", 0))
                 downloaded = 0
                 with open(dest, "wb") as out:
                     while True:
+                        if cancel_check and cancel_check():
+                            self.log(f"[DOWNLOAD] {file.name} cancelled")
+                            break
                         chunk = resp.read(65536)
                         if not chunk:
                             break
@@ -512,6 +516,18 @@ class CameraManager:
                         if total > 0:
                             progress_cb(downloaded / total)
 
+            # Check for cancellation or incomplete download
+            if cancel_check and cancel_check():
+                self._remove_partial(dest)
+                done_cb(False)
+                return
+
+            if total > 0 and downloaded < total:
+                self.log(f"[DOWNLOAD] {file.name} incomplete: {downloaded}/{total} bytes")
+                self._remove_partial(dest)
+                done_cb(False)
+                return
+
             if file.remote_timestamp:
                 ts = file.remote_timestamp.timestamp()
                 os.utime(dest, (ts, ts))
@@ -519,7 +535,17 @@ class CameraManager:
             done_cb(dest.stat().st_size > 0)
         except Exception as e:
             self.log(f"[DOWNLOAD] {file.name} error: {e}")
+            self._remove_partial(dest)
             done_cb(False)
+
+    def _remove_partial(self, path: Path):
+        """Remove a partially-downloaded file to avoid corruption."""
+        try:
+            if path.exists():
+                path.unlink()
+                self.log(f"[CLEANUP] Removed partial file: {path.name}")
+        except OSError:
+            pass
 
     def delete_file(self, file: CameraFile):
         result = self._run_fresh_command(f"rm -f {file.remote_path}", read_delay=1.0)
@@ -636,10 +662,14 @@ RED = "#F24D40"
 # CustomTkinter widgets accept these tuples directly
 BG_CARD = ("#ffffff", "#333333")
 BG_HEADER = ("#eef0f2", "#262628")
+TEXT_PRI = ("#1a1a1a", "#f0f0f0")
 TEXT_SEC = ("#555555", "#b0b0b0")
 TEXT_MUTED = ("#888888", "#707070")
 BORDER = ("#d0d0d0", "#444444")
 STRIPE = ("#f5f5f7", "#383838")
+# Secondary button colors — visible against card backgrounds
+BTN_SEC = ("#e0e2e6", "#484848")
+BTN_SEC_HOVER = ("#cfd1d5", "#5a5a5a")
 
 
 # ============================================================
@@ -653,6 +683,7 @@ class HumDropApp(ctk.CTk):
         self.files: List[CameraFile] = []
         self.is_connected = False
         self.is_downloading = False
+        self._download_cancel = False
 
         self.title("HumDrop")
         self.geometry("720x800")
@@ -932,7 +963,7 @@ class HumDropApp(ctk.CTk):
         self.folder_btn = ctk.CTkButton(
             folder_frame, text=self._short_path(self.camera.video_dir),
             font=ctk.CTkFont(family="Courier", size=13), anchor="w",
-            fg_color=BG_CARD, hover_color=TEXT_MUTED, height=28,
+            fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI, height=28,
             command=self._change_folder
         )
         self.folder_btn.grid(row=0, column=1, sticky="ew", padx=(8, 0))
@@ -984,10 +1015,10 @@ class HumDropApp(ctk.CTk):
         btn_row.grid(row=0, column=1, sticky="e")
 
         ctk.CTkButton(btn_row, text="Select All", width=85, height=28, font=ctk.CTkFont(size=13),
-                      fg_color=BG_CARD, hover_color=TEXT_MUTED,
+                      fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI,
                       command=self._select_all).pack(side="left", padx=(0, 4))
         ctk.CTkButton(btn_row, text="Select New", width=85, height=28, font=ctk.CTkFont(size=13),
-                      fg_color=BG_CARD, hover_color=TEXT_MUTED,
+                      fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI,
                       command=self._select_new).pack(side="left")
 
         # Table (ttk.Treeview with themed styling)
@@ -1042,7 +1073,7 @@ class HumDropApp(ctk.CTk):
         action_frame.grid_columnconfigure(1, weight=1)
 
         self.refresh_btn = ctk.CTkButton(action_frame, text="Refresh", width=80,
-                                          fg_color=BG_CARD, hover_color=TEXT_MUTED,
+                                          fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI,
                                           command=self._refresh)
         self.refresh_btn.grid(row=0, column=0, sticky="w")
 
@@ -1052,7 +1083,7 @@ class HumDropApp(ctk.CTk):
         self.download_btn.grid(row=0, column=1)
 
         self.openfolder_btn = ctk.CTkButton(action_frame, text="Open Folder", width=90,
-                                             fg_color=BG_CARD, hover_color=TEXT_MUTED,
+                                             fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI,
                                              command=self._open_folder)
         self.openfolder_btn.grid(row=0, column=2, sticky="e")
 
@@ -1071,7 +1102,8 @@ class HumDropApp(ctk.CTk):
         self.scheme_menu = ctk.CTkOptionMenu(
             naming_frame, values=scheme_values, variable=self.scheme_var,
             width=280, height=30, font=ctk.CTkFont(size=13),
-            fg_color=BG_CARD, button_color=ORANGE, button_hover_color=ORANGE_HOVER,
+            fg_color=BTN_SEC, text_color=TEXT_PRI,
+            button_color=ORANGE, button_hover_color=ORANGE_HOVER,
             command=self._scheme_changed
         )
         self.scheme_menu.pack(side="left", padx=(8, 0))
@@ -1102,7 +1134,8 @@ class HumDropApp(ctk.CTk):
 
         self.clean_btn = ctk.CTkButton(bottom_frame, text="Delete Downloaded from Camera", width=240, height=32,
                                         fg_color="transparent", border_width=1, border_color=BORDER,
-                                        hover_color=BG_CARD, font=ctk.CTkFont(size=13),
+                                        text_color=TEXT_PRI, hover_color=BTN_SEC,
+                                        font=ctk.CTkFont(size=13),
                                         command=self._clean)
         self.clean_btn.grid(row=0, column=0, sticky="w")
 
@@ -1239,6 +1272,15 @@ class HumDropApp(ctk.CTk):
 
     def _connect(self):
         if self.is_connected:
+            # Cancel any in-progress download before disconnecting
+            if self.is_downloading:
+                self._download_cancel = True
+                self.is_downloading = False
+                self.download_btn.configure(state="normal")
+                self.refresh_btn.configure(state="normal")
+                self.clean_btn.configure(state="normal")
+                self.wipe_btn.configure(state="normal")
+                self._hide_progress()
             self.camera.cleanup()
             self.is_connected = False
             self.files = []
@@ -1333,6 +1375,7 @@ class HumDropApp(ctk.CTk):
             return
 
         self.is_downloading = True
+        self._download_cancel = False
         self.download_btn.configure(state="disabled")
         self.refresh_btn.configure(state="disabled")
         self.clean_btn.configure(state="disabled")
@@ -1344,7 +1387,14 @@ class HumDropApp(ctk.CTk):
         total = len(selected)
 
         def download_seq():
+            completed_count = 0
+            connection_lost = False
             for completed, (idx, file) in enumerate(selected):
+                # Check cancel flag before each file
+                if self._download_cancel:
+                    self.camera.log("[DOWNLOAD] Cancelled by user")
+                    break
+
                 dl_name = f"{file.name} -> {file.local_name}" if file.is_renamed else file.local_name
                 self.after(0, lambda n=dl_name, c=completed: self.progress_label.configure(
                     text=f"Downloading {n} ({c + 1}/{total})..."))
@@ -1360,29 +1410,66 @@ class HumDropApp(ctk.CTk):
                     flag[0] = ok
                     ev.set()
 
-                self.camera.download_file(file, prog, done)
-                done_event.wait()
+                self.camera.download_file(file, prog, done,
+                                          cancel_check=lambda: self._download_cancel)
+                # Wait with timeout — don't hang forever on connection loss
+                done_event.wait(timeout=120)
+
+                if not done_event.is_set():
+                    # Timed out — connection is probably lost
+                    self.camera.log(f"[DOWNLOAD] {file.name} timed out")
+                    connection_lost = True
+                    break
+
+                if self._download_cancel:
+                    break
 
                 if success_flag[0]:
+                    completed_count += 1
                     self.files[idx].is_downloaded = True
                     self.files[idx].selected = False
                     self.after(0, self._refresh_table)
+                else:
+                    # Download failed — check if camera is still reachable
+                    if not self.camera.is_reachable():
+                        connection_lost = True
+                        self.camera.log("[DOWNLOAD] Connection lost mid-download")
+                        break
 
-            self.after(0, lambda: self._download_done(total))
+            self.after(0, lambda: self._download_done(
+                completed_count, connection_lost=connection_lost))
 
         threading.Thread(target=download_seq, daemon=True).start()
 
-    def _download_done(self, total: int):
+    def _download_done(self, total: int, connection_lost: bool = False):
         self.is_downloading = False
+        self._download_cancel = False
         self.download_btn.configure(state="normal")
         self.refresh_btn.configure(state="normal")
         self.clean_btn.configure(state="normal")
         self.wipe_btn.configure(state="normal")
-        self.progress_bar.set(1.0)
-        self.progress_label.configure(text=f"Done! Downloaded {total} files.")
-        self._refresh_table()
-        self._update_summary()
-        self.after(4000, self._hide_progress)
+
+        if connection_lost:
+            self.progress_bar.set(0)
+            msg = f"Downloaded {total} files before connection was lost."
+            self.progress_label.configure(text=msg)
+            self._update_status("Connection lost", connected=False)
+            self.is_connected = False
+            self.camera.cleanup()
+            self.connect_btn.configure(text="Connect")
+            # Don't switch to disconnected view — keep file list visible
+            # so user can see what was/wasn't downloaded
+            self.accent_strip.configure(fg_color=TEAL)
+            self.table_frame.configure(border_width=0)
+            self._refresh_table()
+            self._update_summary()
+            self.after(8000, self._hide_progress)
+        else:
+            self.progress_bar.set(1.0)
+            self.progress_label.configure(text=f"Done! Downloaded {total} files.")
+            self._refresh_table()
+            self._update_summary()
+            self.after(4000, self._hide_progress)
 
     def _hide_progress(self):
         self.progress_bar.grid_forget()
