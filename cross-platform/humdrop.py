@@ -1426,13 +1426,23 @@ class HumDropApp(ctk.CTk):
         self.example_label.pack(side="left", padx=(8, 0))
         self._update_example()
 
+        # Warning for "Camera original" naming
+        self.original_warning = ctk.CTkLabel(
+            f, text="\u26A0  Heads up: The camera reuses names like SCKR1000 across sessions. "
+                    "Duplicates get _1, _2 suffixes \u2014 your files stay safe, but you lose dates and organization.",
+            font=ctk.CTkFont(size=13), text_color=ORANGE,
+            wraplength=600, justify="left"
+        )
+        if self.camera.naming_scheme == NamingScheme.ORIGINAL:
+            self.original_warning.grid(row=10, column=0, sticky="w", padx=24, pady=(4, 0))
+
         # Separator 2
         sep2 = ctk.CTkFrame(f, height=1, fg_color=BORDER)
-        sep2.grid(row=10, column=0, sticky="ew", padx=20, pady=(12, 0))
+        sep2.grid(row=11, column=0, sticky="ew", padx=20, pady=(12, 0))
 
         # Bottom buttons
         bottom_frame = ctk.CTkFrame(f, fg_color="transparent")
-        bottom_frame.grid(row=11, column=0, sticky="ew", padx=20, pady=(10, 16))
+        bottom_frame.grid(row=12, column=0, sticky="ew", padx=20, pady=(10, 16))
         bottom_frame.grid_columnconfigure(1, weight=1)
 
         self.clean_btn = ctk.CTkButton(bottom_frame, text="Delete Synced from Camera", width=240, height=36,
@@ -2215,7 +2225,8 @@ class HumDropApp(ctk.CTk):
                       f'[Windows.UI.Notifications.ToastNotification]::new($xml))')
                 subprocess.run(["powershell", "-Command", ps], capture_output=True, timeout=5)
             else:
-                subprocess.run(["notify-send", title, message], capture_output=True, timeout=5)
+                if shutil.which("notify-send"):
+                    subprocess.run(["notify-send", title, message], capture_output=True, timeout=5)
         except Exception:
             pass  # Notifications are best-effort
 
@@ -2260,6 +2271,12 @@ class HumDropApp(ctk.CTk):
         state = "disabled" if is_original else "normal"
         self.prefix_entry.configure(state=state)
 
+        # Show/hide "Camera original" warning
+        if is_original:
+            self.original_warning.grid(row=10, column=0, sticky="w", padx=24, pady=(4, 0))
+        else:
+            self.original_warning.grid_forget()
+
         self._update_example()
 
         if self.files and self.is_connected:
@@ -2298,15 +2315,15 @@ class HumDropApp(ctk.CTk):
 
     def _show_profiles(self):
         dlg = ctk.CTkToplevel(self)
-        dlg.title("Camera Presets")
+        dlg.title("Camera and Settings Presets")
         dlg.geometry("400x360")
         dlg.resizable(False, False)
         dlg.transient(self)
         dlg.grab_set()
 
-        ctk.CTkLabel(dlg, text="Camera Presets", font=ctk.CTkFont(size=18, weight="bold")).pack(
+        ctk.CTkLabel(dlg, text="Camera and Settings Presets", font=ctk.CTkFont(size=18, weight="bold")).pack(
             padx=16, pady=(12, 4))
-        ctk.CTkLabel(dlg, text="Save and switch between camera & settings configurations",
+        ctk.CTkLabel(dlg, text="Save and switch between settings configurations",
                      font=ctk.CTkFont(size=14), text_color=TEXT_SEC).pack(padx=16)
 
         profiles = self.camera.load_profiles()

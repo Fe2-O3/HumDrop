@@ -3,19 +3,24 @@ set -e
 cd "$(dirname "$0")"
 echo "Building HumDrop for macOS..."
 
+# Use python3/pip3 if python/pip not available
+PYTHON=${PYTHON:-$(command -v python3 || command -v python)}
+PIP=${PIP:-$(command -v pip3 || command -v pip)}
+
 # Generate icons if missing
 if [ ! -f HumDrop.icns ]; then
     echo "Generating app icons..."
-    pip install Pillow 2>/dev/null
-    python generate_icons.py
+    $PIP install Pillow 2>/dev/null
+    $PYTHON generate_icons.py
 fi
 
-pip install -r requirements.txt pyinstaller 2>/dev/null
+$PIP install -r requirements.txt pyinstaller 2>/dev/null
+
 pyinstaller --onedir --windowed \
     --name "HumDrop" \
     --icon "HumDrop.icns" \
     --osx-bundle-identifier "com.fe2o3.humdrop" \
-    --add-data "$(python -c 'import customtkinter; import os; print(os.path.dirname(customtkinter.__file__))'):customtkinter" \
+    --collect-all customtkinter \
     humdrop.py
 
 # Add macOS folder permission descriptions to Info.plist
