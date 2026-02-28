@@ -866,6 +866,7 @@ class HumDropApp(ctk.CTk):
         self.is_downloading = False
         self._download_cancel = False
         self._heartbeat_running = False
+        self._original_warning_shown = False  # one-per-session popup
         self.auto_delete_var = ctk.BooleanVar(value=False)
 
         self.title("HumDrop")
@@ -1100,7 +1101,7 @@ class HumDropApp(ctk.CTk):
 
     def _build_ui(self):
         self._bird_canvases = []
-        self.grid_rowconfigure(2, weight=1)
+        self.grid_rowconfigure(3, weight=1)  # content area gets the stretch
         self.grid_columnconfigure(0, weight=1)
 
         # --- Accent strip ---
@@ -1189,9 +1190,33 @@ class HumDropApp(ctk.CTk):
         )
         self.openfolder_btn.grid(row=0, column=2, sticky="e", padx=(8, 0))
 
+        # --- Persistent storage bar (always visible, below header) ---
+        self.storage_frame = ctk.CTkFrame(self, fg_color="transparent", height=24)
+        self.storage_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(4, 0))
+        self.storage_frame.grid_propagate(True)
+
+        self.storage_label = ctk.CTkLabel(self.storage_frame, text="", font=ctk.CTkFont(size=14),
+                                           text_color=TEXT_MUTED)
+        self.storage_label.pack(side="left")
+
+        # Visual storage bar (teal filled bar with empty/full markers)
+        self.storage_canvas = tk.Canvas(self.storage_frame, width=160, height=16,
+                                         highlightthickness=0)
+        try:
+            ctk_bg = ctk.ThemeManager.theme["CTk"]["fg_color"]
+            mode = ctk.get_appearance_mode()
+            self.storage_canvas.configure(bg=ctk_bg[1] if mode == "Dark" else ctk_bg[0])
+        except Exception:
+            self.storage_canvas.configure(bg="#2b2b2b" if ctk.get_appearance_mode() == "Dark" else "#f0f0f0")
+        self.storage_canvas.pack(side="left", padx=(8, 0))
+
+        self.storage_time_label = ctk.CTkLabel(self.storage_frame, text="", font=ctk.CTkFont(size=12),
+                                                text_color=TEXT_MUTED)
+        self.storage_time_label.pack(side="left", padx=(6, 0))
+
         # --- Main content area ---
         self.content = ctk.CTkFrame(self, fg_color="transparent")
-        self.content.grid(row=2, column=0, sticky="nsew")
+        self.content.grid(row=3, column=0, sticky="nsew")
         self.content.grid_rowconfigure(0, weight=1)
         self.content.grid_columnconfigure(0, weight=1)
 
@@ -1200,7 +1225,7 @@ class HumDropApp(ctk.CTk):
         self.instruction_frame.grid(row=0, column=0, sticky="nsew")
 
         inner = ctk.CTkFrame(self.instruction_frame, fg_color="transparent")
-        inner.place(relx=0.5, rely=0.4, anchor="center")
+        inner.place(relx=0.5, rely=0.45, anchor="center")
 
         bird_c = self._create_bird_canvas(inner, size=120)
         bird_c.pack(pady=(0, 16))
@@ -1231,25 +1256,6 @@ class HumDropApp(ctk.CTk):
         hdr.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(hdr, text="Files", font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, sticky="w")
-
-        storage_row = ctk.CTkFrame(hdr, fg_color="transparent")
-        storage_row.grid(row=1, column=0, columnspan=2, sticky="ew")
-
-        self.storage_label = ctk.CTkLabel(storage_row, text="", font=ctk.CTkFont(size=14),
-                                           text_color=TEXT_MUTED)
-        self.storage_label.pack(side="left")
-
-        # Visual storage bar (teal filled bar with empty/full markers)
-        self.storage_canvas = tk.Canvas(storage_row, width=160, height=16,
-                                         highlightthickness=0)
-        # Match canvas bg to the CTk window bg
-        try:
-            ctk_bg = ctk.ThemeManager.theme["CTk"]["fg_color"]
-            mode = ctk.get_appearance_mode()
-            self.storage_canvas.configure(bg=ctk_bg[1] if mode == "Dark" else ctk_bg[0])
-        except Exception:
-            self.storage_canvas.configure(bg="#2b2b2b" if ctk.get_appearance_mode() == "Dark" else "#f0f0f0")
-        self.storage_canvas.pack(side="left", padx=(8, 0))
 
         btn_row = ctk.CTkFrame(hdr, fg_color="transparent")
         btn_row.grid(row=0, column=1, sticky="e")
@@ -2155,10 +2161,13 @@ class HumDropApp(ctk.CTk):
                 free = fmt(info["free"])
                 total = fmt(info["total"])
                 pct = info["used"] / info["total"] * 100 if info["total"] else 0
+                t = datetime.now()
+                now = f"{t.hour % 12 or 12}:{t.minute:02d} {'PM' if t.hour >= 12 else 'AM'}"
                 def update_ui():
                     self.storage_label.configure(
                         text=f"Storage: {used} used / {free} free / {total} total ({pct:.0f}%)")
                     self._draw_storage_bar(pct)
+                    self.storage_time_label.configure(text=f"as of {now}")
                 self.after(0, update_ui)
         threading.Thread(target=do_fetch, daemon=True).start()
 
@@ -2274,6 +2283,15 @@ class HumDropApp(ctk.CTk):
         # Show/hide "Camera original" warning
         if is_original:
             self.original_warning.grid(row=10, column=0, sticky="w", padx=24, pady=(4, 0))
+            # One-per-session popup the first time they select it
+            if not self._original_warning_shown:
+                self._original_warning_shown = True
+                messagebox.showwarning(
+                    "Camera Original Naming",
+                    "The camera reuses filenames like SCKR1000.mp4 each session.\n\n"
+                    "HumDrop won't overwrite existing files \u2014 duplicates get _1, _2 "
+                    "suffixes \u2014 but you'll lose dates and organization over time.\n\n"
+                    "Consider using a custom naming scheme instead.")
         else:
             self.original_warning.grid_forget()
 
