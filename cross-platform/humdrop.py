@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HumDrop v0.081 — Cross-platform camera sync utility
+HumDrop v0.082 — Cross-platform camera sync utility
 By Kenneth Russell DeGraff
 
 Syncs videos and photos from WiFi-enabled trail/bird cameras.
@@ -164,6 +164,7 @@ class CameraManager:
         self.naming_separator = "_"  # "_" or " "
         self.date_subfolders = False
         self.auto_open_folder = False
+        self.last_storage = None  # {"used": bytes, "free": bytes, "total": bytes, "timestamp": str}
         try:
             with open(self._settings_path()) as f:
                 data = json.load(f)
@@ -181,6 +182,7 @@ class CameraManager:
             self.naming_separator = " " if sep == " " else "_"
             self.date_subfolders = data.get("date_subfolders", False)
             self.auto_open_folder = data.get("auto_open_folder", False)
+            self.last_storage = data.get("last_storage", None)
         except (FileNotFoundError, json.JSONDecodeError):
             pass
         self.video_dir.mkdir(parents=True, exist_ok=True)
@@ -194,6 +196,7 @@ class CameraManager:
             "naming_separator": self.naming_separator,
             "date_subfolders": self.date_subfolders,
             "auto_open_folder": self.auto_open_folder,
+            "last_storage": self.last_storage,
         }
         try:
             with open(self._settings_path(), "w") as f:
@@ -875,6 +878,7 @@ class HumDropApp(ctk.CTk):
         ctk.set_appearance_mode("system")
 
         self._build_ui()
+        self._restore_storage_display()
         self._show_disconnected()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -2148,26 +2152,47 @@ class HumDropApp(ctk.CTk):
         else:
             subprocess.run(["xdg-open", path])
 
+    def _restore_storage_display(self):
+        """Restore last-known storage info from saved settings on app launch."""
+        s = self.camera.last_storage
+        if s and s.get("total"):
+            self._apply_storage_display(s["used"], s["free"], s["total"], s["timestamp"])
+
+    def _fmt_storage_bytes(self, b):
+        if b >= 1_073_741_824:
+            return f"{b / 1_073_741_824:.1f} GB"
+        return f"{b / 1_048_576:.0f} MB"
+
+    def _fmt_storage_time(self, t=None):
+        t = t or datetime.now()
+        return f"{t.hour % 12 or 12}:{t.minute:02d} {'PM' if t.hour >= 12 else 'AM'} {t.month}/{t.day}/{str(t.year)[2:]}"
+
+    def _apply_storage_display(self, used_b, free_b, total_b, timestamp_str):
+        """Update storage label, bar, and timestamp from raw byte values."""
+        used = self._fmt_storage_bytes(used_b)
+        free = self._fmt_storage_bytes(free_b)
+        total = self._fmt_storage_bytes(total_b)
+        pct = used_b / total_b * 100 if total_b else 0
+        self.storage_label.configure(
+            text=f"Storage: {used} used / {free} free / {total} total ({pct:.0f}%)")
+        self._draw_storage_bar(pct)
+        self.storage_time_label.configure(text=f"as of {timestamp_str}")
+
     def _fetch_storage_info(self):
         """Fetch camera storage usage in background and update the label + bar."""
         def do_fetch():
             info = self.camera.get_storage_info()
             if info and self.is_connected:
-                def fmt(b):
-                    if b >= 1_073_741_824:
-                        return f"{b / 1_073_741_824:.1f} GB"
-                    return f"{b / 1_048_576:.0f} MB"
-                used = fmt(info["used"])
-                free = fmt(info["free"])
-                total = fmt(info["total"])
-                pct = info["used"] / info["total"] * 100 if info["total"] else 0
                 t = datetime.now()
-                now = f"{t.hour % 12 or 12}:{t.minute:02d} {'PM' if t.hour >= 12 else 'AM'} {t.month}/{t.day}/{str(t.year)[2:]}"
+                now = self._fmt_storage_time(t)
+                # Persist to settings so it survives restart
+                self.camera.last_storage = {
+                    "used": info["used"], "free": info["free"],
+                    "total": info["total"], "timestamp": now,
+                }
+                self.camera.save_settings()
                 def update_ui():
-                    self.storage_label.configure(
-                        text=f"Storage: {used} used / {free} free / {total} total ({pct:.0f}%)")
-                    self._draw_storage_bar(pct)
-                    self.storage_time_label.configure(text=f"as of {now}")
+                    self._apply_storage_display(info["used"], info["free"], info["total"], now)
                 self.after(0, update_ui)
         threading.Thread(target=do_fetch, daemon=True).start()
 
@@ -2505,7 +2530,7 @@ class HumDropApp(ctk.CTk):
         ctk.CTkLabel(banner_inner, text="HumDrop",
                      font=ctk.CTkFont(size=26, weight="bold"),
                      text_color="white").pack(pady=(2, 0))
-        ctk.CTkLabel(banner_inner, text="v0.081  \u2022  Camera Sync",
+        ctk.CTkLabel(banner_inner, text="v0.082  \u2022  Camera Sync",
                      font=ctk.CTkFont(size=15),
                      text_color=TEAL_HOVER).pack()
 
