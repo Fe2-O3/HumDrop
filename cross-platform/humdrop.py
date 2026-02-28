@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HumDrop v0.05 — Cross-platform camera sync utility
+HumDrop v0.07 — Cross-platform camera sync utility
 By Kenneth Russell DeGraff
 
 Syncs videos and photos from WiFi-enabled trail/bird cameras.
@@ -158,6 +158,8 @@ class CameraManager:
         self.video_dir = self._default_video_dir()
         self.naming_scheme = NamingScheme.PREFIX_DATE
         self.naming_prefix = "BirdCam"
+        self.date_subfolders = False
+        self.auto_open_folder = False
         try:
             with open(self._settings_path()) as f:
                 data = json.load(f)
@@ -171,6 +173,8 @@ class CameraManager:
                     self.naming_scheme = ns
                     break
             self.naming_prefix = data.get("naming_prefix", self.naming_prefix)
+            self.date_subfolders = data.get("date_subfolders", False)
+            self.auto_open_folder = data.get("auto_open_folder", False)
         except (FileNotFoundError, json.JSONDecodeError):
             pass
         self.video_dir.mkdir(parents=True, exist_ok=True)
@@ -181,12 +185,126 @@ class CameraManager:
             "video_dir": str(self.video_dir),
             "naming_scheme": self.naming_scheme.value,
             "naming_prefix": self.naming_prefix,
+            "date_subfolders": self.date_subfolders,
+            "auto_open_folder": self.auto_open_folder,
         }
         try:
             with open(self._settings_path(), "w") as f:
                 json.dump(data, f, indent=2)
         except OSError:
             pass
+
+    def _history_path(self) -> Path:
+        return self._settings_path().parent / "history.json"
+
+    def log_session(self, action: str, file_count: int, auto_deleted: int = 0, notes: str = ""):
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "action": action,
+            "files": file_count,
+            "auto_deleted": auto_deleted,
+            "camera_ip": self.camera_ip,
+            "save_folder": str(self.video_dir),
+            "notes": notes,
+        }
+        history = []
+        try:
+            with open(self._history_path()) as f:
+                history = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+        history.append(entry)
+        # Keep last 200 entries
+        history = history[-200:]
+        try:
+            with open(self._history_path(), "w") as f:
+                json.dump(history, f, indent=2)
+        except OSError:
+            pass
+
+    def get_history(self) -> list:
+        try:
+            with open(self._history_path()) as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
+
+    # --- Camera Profiles ---
+
+    def _profiles_path(self) -> Path:
+        return self._settings_path().parent / "profiles.json"
+
+    def load_profiles(self) -> Dict[str, dict]:
+        try:
+            with open(self._profiles_path()) as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+
+    def save_profile(self, name: str):
+        profiles = self.load_profiles()
+        profiles[name] = {
+            "camera_ip": self.camera_ip,
+            "video_dir": str(self.video_dir),
+            "naming_scheme": self.naming_scheme.value,
+            "naming_prefix": self.naming_prefix,
+        }
+        try:
+            with open(self._profiles_path(), "w") as f:
+                json.dump(profiles, f, indent=2)
+        except OSError:
+            pass
+
+    def apply_profile(self, name: str) -> bool:
+        profiles = self.load_profiles()
+        if name not in profiles:
+            return False
+        p = profiles[name]
+        self.camera_ip = p.get("camera_ip", self.camera_ip)
+        d = p.get("video_dir")
+        if d:
+            self.video_dir = Path(d)
+            self.video_dir.mkdir(parents=True, exist_ok=True)
+        s = p.get("naming_scheme", "")
+        for ns in NamingScheme:
+            if ns.value == s:
+                self.naming_scheme = ns
+                break
+        self.naming_prefix = p.get("naming_prefix", self.naming_prefix)
+        self.save_settings()
+        return True
+
+    def delete_profile(self, name: str):
+        profiles = self.load_profiles()
+        profiles.pop(name, None)
+        try:
+            with open(self._profiles_path(), "w") as f:
+                json.dump(profiles, f, indent=2)
+        except OSError:
+            pass
+
+    # --- Storage info ---
+
+    def get_storage_info(self) -> Optional[Dict[str, int]]:
+        """Get camera storage usage via df command over telnet. Returns dict with used/free/total bytes."""
+        output = self._run_fresh_command("df /mnt/mmc", read_delay=2.0)
+        self.log(f"[STORAGE] df output: {output[:300]}")
+        for line in output.splitlines():
+            parts = line.split()
+            if len(parts) >= 4 and "/mnt/mmc" in line:
+                try:
+                    # df output in 1K blocks: filesystem, total, used, free, ...
+                    total_kb = int(parts[1])
+                    used_kb = int(parts[2])
+                    free_kb = int(parts[3])
+                    return {
+                        "total": total_kb * 1024,
+                        "used": used_kb * 1024,
+                        "free": free_kb * 1024,
+                    }
+                except (ValueError, IndexError):
+                    pass
+        return None
 
     def change_video_dir(self, path: Path):
         self.video_dir = path
@@ -449,11 +567,18 @@ class CameraManager:
     def _build_local_size_map(self) -> Dict[int, str]:
         size_map = {}
         try:
-            for entry in self.video_dir.iterdir():
-                if entry.suffix.lower() in (".mp4", ".jpg"):
-                    size = entry.stat().st_size
-                    if size > 0:
-                        size_map[size] = entry.name
+            # Scan root folder and date subfolders
+            dirs_to_scan = [self.video_dir]
+            if self.date_subfolders:
+                for d in self.video_dir.iterdir():
+                    if d.is_dir():
+                        dirs_to_scan.append(d)
+            for scan_dir in dirs_to_scan:
+                for entry in scan_dir.iterdir():
+                    if entry.is_file() and entry.suffix.lower() in (".mp4", ".jpg"):
+                        size = entry.stat().st_size
+                        if size > 0:
+                            size_map[size] = entry.name
         except OSError:
             pass
         return size_map
@@ -531,9 +656,16 @@ class CameraManager:
     # --- Download ---
 
     def download_file(self, file: CameraFile, progress_cb: Callable, done_cb: Callable,
-                      cancel_check: Optional[Callable] = None):
+                      cancel_check: Optional[Callable] = None,
+                      bytes_cb: Optional[Callable] = None):
         url = f"http://{self.camera_ip}:{self.http_port}/{file.http_path}"
-        dest = self.video_dir / file.local_name
+        save_dir = self.video_dir
+        if self.date_subfolders and file.remote_timestamp:
+            d = file.remote_timestamp
+            subfolder = f"{d.year:04d}-{d.month:02d}-{d.day:02d}"
+            save_dir = self.video_dir / subfolder
+            save_dir.mkdir(parents=True, exist_ok=True)
+        dest = save_dir / file.local_name
         try:
             with urllib.request.urlopen(url, timeout=30) as resp:
                 total = int(resp.headers.get("Content-Length", 0))
@@ -550,6 +682,8 @@ class CameraManager:
                         downloaded += len(chunk)
                         if total > 0:
                             progress_cb(downloaded / total)
+                        if bytes_cb:
+                            bytes_cb(downloaded)
 
             # Check for cancellation or incomplete download
             if cancel_check and cancel_check():
@@ -760,133 +894,155 @@ class HumDropApp(ctk.CTk):
         self.after(1000, self._poll_appearance)
 
     def _create_bird_canvas(self, parent, size=120):
-        """Draw a stylized bird icon similar to the native Swift app icon."""
+        """Draw the bird icon matching the app icon (generate_icons.py)."""
         bg = self._resolve(("#f0f0f0", "#1e1e1e"))
         c = tk.Canvas(parent, width=size, height=size, highlightthickness=0, bg=bg)
 
         s = size
         pad = 2
-        r = s * 0.22
+        r = s * 0.18
 
         # Rounded rectangle background — deep teal base
         pts = [
-            pad + r, pad,
-            s - pad - r, pad,
-            s - pad, pad,
-            s - pad, pad + r,
-            s - pad, s - pad - r,
-            s - pad, s - pad,
-            s - pad - r, s - pad,
-            pad + r, s - pad,
-            pad, s - pad,
-            pad, s - pad - r,
-            pad, pad + r,
-            pad, pad,
+            pad + r, pad, s - pad - r, pad, s - pad, pad,
+            s - pad, pad + r, s - pad, s - pad - r, s - pad, s - pad,
+            s - pad - r, s - pad, pad + r, s - pad, pad, s - pad,
+            pad, s - pad - r, pad, pad + r, pad, pad,
         ]
         c.create_polygon(pts, smooth=True, fill=TEAL_DARK, outline="")
 
-        # Lighter teal overlay on top half for gradient feel
+        # Lighter teal overlay on upper 65% for gradient feel
         top_pts = [
-            pad + r, pad,
-            s - pad - r, pad,
-            s - pad, pad,
-            s - pad, pad + r,
-            s - pad, s * 0.50,
-            pad, s * 0.50,
-            pad, pad + r,
-            pad, pad,
+            pad + r, pad, s - pad - r, pad, s - pad, pad,
+            s - pad, pad + r, s - pad, s * 0.65,
+            pad, s * 0.65, pad, pad + r, pad, pad,
         ]
-        c.create_polygon(top_pts, smooth=True, fill=TEAL, outline="", stipple="gray50")
+        c.create_polygon(top_pts, smooth=True, fill=TEAL, outline="")
+        # Blend zone between teal and teal_dark
+        blend_pts = [
+            pad, s * 0.45, s - pad, s * 0.45,
+            s - pad, s * 0.65, pad, s * 0.65,
+        ]
+        c.create_polygon(blend_pts, fill=TEAL, outline="")
 
-        # Subtle border
+        # Subtle white border
         c.create_polygon(pts, smooth=True, fill="", outline="white", width=1)
 
-        # Branch — a gentle curved line across the middle
-        branch_y = s * 0.54
-        c.create_line(
-            s * 0.06, branch_y + s * 0.02,
-            s * 0.30, branch_y - s * 0.01,
-            s * 0.60, branch_y + s * 0.01,
-            s * 0.94, branch_y - s * 0.005,
-            fill="#5C3118", width=max(2, s * 0.028), smooth=True, capstyle="round"
-        )
-        # Small twig
-        c.create_line(
-            s * 0.72, branch_y, s * 0.79, branch_y - s * 0.09,
-            fill="#5C3118", width=max(1, s * 0.014), capstyle="round"
-        )
+        # Branch — gentle curve via multiple points
+        branch_y = s * 0.52
+        bw_line = max(2, s * 0.028)
+        branch_color = "#503C28"
+        branch_pts = []
+        for i in range(6):
+            t = i / 5.0
+            bx_pt = s * 0.12 + t * s * 0.76
+            by_pt = branch_y + math.sin(t * math.pi) * s * 0.03
+            branch_pts.extend([bx_pt, by_pt])
+        c.create_line(*branch_pts, fill=branch_color, width=bw_line,
+                      smooth=True, capstyle="round")
+        # Small twig going up-right
+        tw_x = s * 0.12 + (13 / 19.0) * s * 0.76
+        tw_y = branch_y + math.sin((13 / 19.0) * math.pi) * s * 0.03
+        c.create_line(tw_x, tw_y, tw_x + s * 0.06, tw_y - s * 0.07,
+                      fill=branch_color, width=max(1, bw_line // 2), capstyle="round")
 
-        # Bird body (larger white oval, sitting on branch)
-        bx = s * 0.50
-        by = branch_y - s * 0.13
-        bw = s * 0.10
-        bh = s * 0.13
-        c.create_oval(bx - bw, by - bh, bx + bw, by + bh, fill="white", outline="")
+        # Bird body — wider ellipse matching icon proportions
+        bx = s * 0.48
+        by = s * 0.38
+        body_w = s * 0.13
+        body_h = s * 0.10
+        c.create_oval(bx - body_w, by - body_h, bx + body_w, by + body_h,
+                      fill="white", outline="")
 
-        # Head (circle, overlapping top of body)
+        # Head — offset right like icon
         hr = s * 0.068
-        hx = bx + s * 0.018
-        hy = by - bh - hr * 0.15
+        hx = bx + body_w * 0.7
+        hy = by - body_h * 0.5
         c.create_oval(hx - hr, hy - hr, hx + hr, hy + hr, fill="white", outline="")
 
         # Eye
         er = max(1.5, s * 0.014)
-        ex = hx + hr * 0.38
-        ey = hy - hr * 0.08
+        ex = hx + hr * 0.3
+        ey = hy - hr * 0.15
         c.create_oval(ex - er, ey - er, ex + er, ey + er, fill="#2a1510", outline="")
         # Eye highlight
-        hlr = er * 0.45
-        c.create_oval(ex - hlr + er * 0.35, ey - hlr + er * 0.35,
-                      ex + hlr + er * 0.35, ey + hlr + er * 0.35,
-                      fill="white", outline="")
+        hlr = max(1, er * 0.5)
+        c.create_oval(ex - hlr, ey - hlr - 1, ex, ey - 1, fill="white", outline="")
 
         # Beak (orange triangle, pointing right)
+        beak_len = s * 0.05
         c.create_polygon(
-            hx + hr * 0.75, hy + hr * 0.05,
-            hx + hr * 1.7, hy + hr * 0.15,
-            hx + hr * 0.75, hy + hr * 0.4,
+            hx + hr, hy - hr * 0.15,
+            hx + hr + beak_len, hy,
+            hx + hr, hy + hr * 0.2,
             fill=ORANGE, outline=""
         )
 
-        # Tail feathers (extending left from body)
+        # Tail feathers — 5-point splayed shape matching icon
         c.create_polygon(
-            bx - bw * 0.35, by,
-            bx - bw * 2.4, by - bh * 0.15,
-            bx - bw * 2.2, by + bh * 0.12,
-            bx - bw * 0.35, by + bh * 0.12,
-            fill="white", outline="", smooth=True
+            bx - body_w, by - body_h * 0.3,
+            bx - body_w - s * 0.07, by - body_h * 0.8,
+            bx - body_w - s * 0.05, by - body_h * 0.1,
+            bx - body_w - s * 0.08, by + body_h * 0.2,
+            bx - body_w + s * 0.01, by + body_h * 0.3,
+            fill="white", outline=""
+        )
+
+        # Wing detail line (teal accent, matching icon)
+        c.create_line(
+            bx - body_w * 0.2, by - body_h * 0.3,
+            bx + body_w * 0.1, by,
+            bx - body_w * 0.3, by + body_h * 0.5,
+            fill=TEAL_DARK, width=max(1, s * 0.008), smooth=True
         )
 
         # Legs on branch
-        leg_w = max(1, s * 0.010)
-        foot_y = branch_y - 1
-        c.create_line(bx - s * 0.022, by + bh * 0.65, bx - s * 0.028, foot_y,
-                      fill="#5C3118", width=leg_w, capstyle="round")
-        c.create_line(bx + s * 0.022, by + bh * 0.65, bx + s * 0.016, foot_y,
-                      fill="#5C3118", width=leg_w, capstyle="round")
+        leg_w = max(1, s * 0.008)
+        foot_y = branch_y - max(1, int(bw_line / 2))
+        foot_x1 = bx + body_w * 0.1
+        foot_x2 = bx + body_w * 0.4
+        foot_top = by + body_h - s * 0.01
+        c.create_line(foot_x1, foot_top, foot_x1, foot_y,
+                      fill="#505050", width=leg_w, capstyle="round")
+        c.create_line(foot_x2, foot_top, foot_x2, foot_y,
+                      fill="#505050", width=leg_w, capstyle="round")
 
         # Download arrow icon below branch
-        dl_cx = s * 0.50
-        dl_cy = s * 0.77
-        dl_w = max(2, s * 0.018)
-        shaft_h = s * 0.07
-        arrow_w = s * 0.045
+        arrow_cx = s * 0.50
+        arrow_top = s * 0.62
+        arrow_bottom = s * 0.82
+        shaft_w = max(2, s * 0.035)
+        head_w = s * 0.10
+        head_h = s * 0.06
 
-        # Arrow shaft (vertical line pointing down)
-        c.create_line(dl_cx, dl_cy - shaft_h, dl_cx, dl_cy + shaft_h * 0.3,
-                      fill="white", width=dl_w, capstyle="round")
-        # Arrowhead (triangle at bottom)
+        # Arrow shaft (rectangle)
+        half_sw = shaft_w / 2
+        c.create_rectangle(arrow_cx - half_sw, arrow_top,
+                           arrow_cx + half_sw, arrow_bottom - head_h,
+                           fill="white", outline="")
+        # Arrowhead triangle
         c.create_polygon(
-            dl_cx, dl_cy + shaft_h * 0.7,
-            dl_cx - arrow_w, dl_cy,
-            dl_cx + arrow_w, dl_cy,
+            arrow_cx - head_w / 2, arrow_bottom - head_h,
+            arrow_cx + head_w / 2, arrow_bottom - head_h,
+            arrow_cx, arrow_bottom,
             fill="white", outline=""
         )
-        # Tray line underneath
-        tray_y = dl_cy + shaft_h * 0.85
-        tray_w = s * 0.06
-        c.create_line(dl_cx - tray_w, tray_y, dl_cx + tray_w, tray_y,
-                      fill="white", width=dl_w, capstyle="round")
+        # Tray with edges underneath
+        tray_y = s * 0.86
+        tray_w = s * 0.22
+        tray_thick = max(2, s * 0.02)
+        tray_edge_h = s * 0.03
+        c.create_line(arrow_cx - tray_w / 2, tray_y,
+                      arrow_cx + tray_w / 2, tray_y,
+                      fill="white", width=tray_thick, capstyle="round")
+        # Left edge
+        c.create_line(arrow_cx - tray_w / 2, tray_y,
+                      arrow_cx - tray_w / 2, tray_y - tray_edge_h,
+                      fill="white", width=tray_thick, capstyle="round")
+        # Right edge
+        c.create_line(arrow_cx + tray_w / 2, tray_y,
+                      arrow_cx + tray_w / 2, tray_y - tray_edge_h,
+                      fill="white", width=tray_thick, capstyle="round")
 
         return c
 
@@ -964,6 +1120,14 @@ class HumDropApp(ctk.CTk):
         ctk.CTkButton(btn_frame, text="About", width=100, fg_color=TEAL,
                       hover_color=TEAL_HOVER, text_color="white",
                       command=self._show_about).pack()
+        small_btns = ctk.CTkFrame(btn_frame, fg_color="transparent")
+        small_btns.pack(pady=(4, 0))
+        ctk.CTkButton(small_btns, text="History", width=48, height=26,
+                      fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI,
+                      font=ctk.CTkFont(size=13), command=self._show_history).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(small_btns, text="Profiles", width=48, height=26,
+                      fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI,
+                      font=ctk.CTkFont(size=13), command=self._show_profiles).pack(side="left")
 
         # IP row
         ip_frame = ctk.CTkFrame(header, fg_color="transparent")
@@ -1056,6 +1220,10 @@ class HumDropApp(ctk.CTk):
 
         ctk.CTkLabel(hdr, text="Files", font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, sticky="w")
 
+        self.storage_label = ctk.CTkLabel(hdr, text="", font=ctk.CTkFont(size=14),
+                                           text_color=TEXT_MUTED)
+        self.storage_label.grid(row=1, column=0, sticky="w")
+
         btn_row = ctk.CTkFrame(hdr, fg_color="transparent")
         btn_row.grid(row=0, column=1, sticky="e")
 
@@ -1132,15 +1300,40 @@ class HumDropApp(ctk.CTk):
                                          command=self._delete_selected)
         self.delete_btn.grid(row=0, column=2, sticky="e")
 
-        # Auto-delete checkbox
+        # Options checkboxes
+        opts_frame = ctk.CTkFrame(f, fg_color="transparent")
+        opts_frame.grid(row=6, column=0, sticky="ew", padx=24, pady=(6, 0))
+
         self.auto_delete_cb = ctk.CTkCheckBox(
-            f, text="Auto-delete from camera after download",
+            opts_frame, text="Auto-delete from camera after download",
             variable=self.auto_delete_var,
             font=ctk.CTkFont(size=16), text_color=TEXT_SEC,
             fg_color=TEAL, hover_color=TEAL_HOVER,
             border_color=BORDER, checkmark_color="white"
         )
-        self.auto_delete_cb.grid(row=6, column=0, sticky="w", padx=24, pady=(6, 0))
+        self.auto_delete_cb.pack(anchor="w")
+
+        self.date_subfolder_var = ctk.BooleanVar(value=self.camera.date_subfolders)
+        self.date_subfolder_cb = ctk.CTkCheckBox(
+            opts_frame, text="Organize downloads into date subfolders",
+            variable=self.date_subfolder_var,
+            font=ctk.CTkFont(size=16), text_color=TEXT_SEC,
+            fg_color=TEAL, hover_color=TEAL_HOVER,
+            border_color=BORDER, checkmark_color="white",
+            command=self._toggle_date_subfolders
+        )
+        self.date_subfolder_cb.pack(anchor="w", pady=(4, 0))
+
+        self.auto_open_var = ctk.BooleanVar(value=self.camera.auto_open_folder)
+        self.auto_open_cb = ctk.CTkCheckBox(
+            opts_frame, text="Open folder after download",
+            variable=self.auto_open_var,
+            font=ctk.CTkFont(size=16), text_color=TEXT_SEC,
+            fg_color=TEAL, hover_color=TEAL_HOVER,
+            border_color=BORDER, checkmark_color="white",
+            command=self._toggle_auto_open
+        )
+        self.auto_open_cb.pack(anchor="w", pady=(4, 0))
 
         # Separator
         sep = ctk.CTkFrame(f, height=1, fg_color=BORDER)
@@ -1379,6 +1572,7 @@ class HumDropApp(ctk.CTk):
         self._update_status("Connected", connected=True)
         self._show_connected()
         self._start_heartbeat()
+        self._fetch_storage_info()
         self._refresh()
 
     def _refresh(self):
@@ -1449,24 +1643,53 @@ class HumDropApp(ctk.CTk):
         self.progress_bar.set(0)
 
         total = len(selected)
+        total_bytes = sum(f.size_bytes for _, f in selected)
 
         def download_seq():
             completed_count = 0
             auto_deleted_count = 0
             connection_lost = False
+            session_start = time.time()
+            cumulative_bytes = [0]  # mutable for nested access
+
             for completed, (idx, file) in enumerate(selected):
                 # Check cancel flag before each file
                 if self._download_cancel:
                     self.camera.log("[DOWNLOAD] Cancelled by user")
                     break
 
-                dl_name = f"{file.name} -> {file.local_name}" if file.is_renamed else file.local_name
-                self.after(0, lambda n=dl_name, c=completed: self.progress_label.configure(
-                    text=f"Downloading {n} ({c + 1}/{total})..."))
+                dl_name = file.local_name
+                file_bytes_so_far = [0]
 
-                def prog(pct, c=completed):
+                def update_speed_label(name=dl_name, c=completed, fb=file_bytes_so_far):
+                    elapsed = time.time() - session_start
+                    cur_bytes = cumulative_bytes[0] + fb[0]
+                    if elapsed > 0.5:
+                        speed = cur_bytes / elapsed
+                        if speed > 0 and total_bytes > 0:
+                            remaining = (total_bytes - cur_bytes) / speed
+                            mins, secs = divmod(int(remaining), 60)
+                            eta = f"{mins}:{secs:02d}" if mins else f"{secs}s"
+                            speed_str = f"{speed / 1_048_576:.1f} MB/s"
+                        else:
+                            eta = "..."
+                            speed_str = "..."
+                    else:
+                        eta = "..."
+                        speed_str = "..."
+                    self.progress_label.configure(
+                        text=f"Downloading {name} ({c + 1}/{total}) — {speed_str}, ~{eta} left")
+
+                self.after(0, update_speed_label)
+
+                def prog(pct, c=completed, fb=file_bytes_so_far):
+                    fb[0] = int(pct * file.size_bytes) if file.size_bytes else 0
                     overall = (c + pct) / total
                     self.after(0, lambda v=overall: self.progress_bar.set(v))
+                    self.after(0, update_speed_label)
+
+                def on_bytes(b, fb=file_bytes_so_far):
+                    fb[0] = b
 
                 done_event = threading.Event()
                 success_flag = [False]
@@ -1476,7 +1699,8 @@ class HumDropApp(ctk.CTk):
                     ev.set()
 
                 self.camera.download_file(file, prog, done,
-                                          cancel_check=lambda: self._download_cancel)
+                                          cancel_check=lambda: self._download_cancel,
+                                          bytes_cb=on_bytes)
                 # Wait with timeout — don't hang forever on connection loss
                 done_event.wait(timeout=120)
 
@@ -1491,6 +1715,7 @@ class HumDropApp(ctk.CTk):
 
                 if success_flag[0]:
                     completed_count += 1
+                    cumulative_bytes[0] += file.size_bytes or 0
                     self.files[idx].is_downloaded = True
                     self.files[idx].selected = False
                     self.after(0, self._refresh_table)
@@ -1525,7 +1750,16 @@ class HumDropApp(ctk.CTk):
         if connection_lost:
             self._handle_disconnect(
                 f"Downloaded {total} files before connection was lost.")
-        elif auto_deleted > 0:
+            self._send_notification("HumDrop", f"Connection lost after downloading {total} files.")
+            self._log_session("download", total, notes=f"Connection lost, auto-deleted {auto_deleted}")
+            return
+        # Success path — notify, open folder, log session
+        self._send_notification("HumDrop", f"Downloaded {total} files" + (
+            f", deleted {auto_deleted} from camera" if auto_deleted else ""))
+        self._log_session("download", total, auto_deleted=auto_deleted)
+        if self.auto_open_var.get() and total > 0:
+            self._auto_open_save_folder()
+        if auto_deleted > 0:
             # Auto-delete happened — refresh the camera file list
             self.progress_bar.set(1.0)
             msg = f"Downloaded {total} files, auto-deleted {auto_deleted} from camera."
@@ -1596,33 +1830,38 @@ class HumDropApp(ctk.CTk):
         self.auto_delete_cb.configure(state="disabled")
 
     def _handle_disconnect(self, message: str = "Connection lost"):
-        """Centralized disconnect handler — resets UI and allows reconnection."""
+        """Centralized disconnect handler — dramatic UI reset to disconnected state."""
         self.is_connected = False
         self.is_downloading = False
         self._download_cancel = True
         self.camera.cleanup()
         self._stop_heartbeat()
 
-        # Reset progress UI
+        # Stop any progress animation
         try:
             self.progress_bar.stop()
         except Exception:
             pass
         self.progress_bar.configure(mode="determinate")
         self.progress_bar.set(0)
-        self.progress_label.configure(text=message)
-        self.progress_label.grid(row=4, column=0, sticky="w", padx=20, pady=(2, 0))
         self.progress_bar.grid_forget()
+        self.progress_label.grid_forget()
 
-        # Reset connection UI
-        self._update_status("Disconnected — click Connect to reconnect", connected=False)
-        self.connect_btn.configure(text="Connect", state="normal")
-        self.accent_strip.configure(fg_color=TEAL)
-        self.table_frame.configure(border_width=0)
-        self._re_enable_buttons()
+        # Full visual reset — back to disconnected home screen
+        self._show_disconnected()
+        self._update_status(message, connected=False)
+        self.connect_btn.configure(text="Reconnect", state="normal")
+
+        # Disable all action buttons since nothing works without connection
+        self._disable_buttons()
+
+        # Clear file state
+        self.files = []
         self._refresh_table()
         self._update_summary()
-        self.after(8000, self._hide_progress)
+
+        # Notify user
+        self._send_notification("HumDrop", message)
 
     def _start_heartbeat(self):
         """Start a periodic check that the camera is still reachable."""
@@ -1637,7 +1876,7 @@ class HumDropApp(ctk.CTk):
             return
         # Don't check during active operations
         if self.is_downloading:
-            self.after(10000, self._heartbeat_check)
+            self.after(5000, self._heartbeat_check)
             return
 
         def check():
@@ -1647,7 +1886,7 @@ class HumDropApp(ctk.CTk):
                 self.after(0, lambda: self._handle_disconnect(
                     "Camera disconnected. Click Connect to reconnect."))
             elif self._heartbeat_running:
-                self.after(15000, self._heartbeat_check)
+                self.after(5000, self._heartbeat_check)
 
         threading.Thread(target=check, daemon=True).start()
 
@@ -1729,6 +1968,7 @@ class HumDropApp(ctk.CTk):
         self._refresh_table()
         self._update_summary()
         self._re_enable_buttons()
+        self._fetch_storage_info()
         self.after(4000, self._hide_progress)
 
     def _clean(self):
@@ -1832,6 +2072,58 @@ class HumDropApp(ctk.CTk):
         else:
             subprocess.run(["xdg-open", path])
 
+    def _fetch_storage_info(self):
+        """Fetch camera storage usage in background and update the label."""
+        def do_fetch():
+            info = self.camera.get_storage_info()
+            if info and self.is_connected:
+                def fmt(b):
+                    if b >= 1_073_741_824:
+                        return f"{b / 1_073_741_824:.1f} GB"
+                    return f"{b / 1_048_576:.0f} MB"
+                used = fmt(info["used"])
+                free = fmt(info["free"])
+                total = fmt(info["total"])
+                pct = info["used"] / info["total"] * 100 if info["total"] else 0
+                self.after(0, lambda: self.storage_label.configure(
+                    text=f"Storage: {used} used / {free} free / {total} total ({pct:.0f}%)"))
+        threading.Thread(target=do_fetch, daemon=True).start()
+
+    def _toggle_date_subfolders(self):
+        self.camera.date_subfolders = self.date_subfolder_var.get()
+        self.camera.save_settings()
+
+    def _toggle_auto_open(self):
+        self.camera.auto_open_folder = self.auto_open_var.get()
+        self.camera.save_settings()
+
+    def _auto_open_save_folder(self):
+        """Open the save folder in the system file manager."""
+        self._open_folder()
+
+    def _send_notification(self, title: str, message: str):
+        """Send a system notification (macOS/Windows/Linux)."""
+        try:
+            system = platform.system()
+            if system == "Darwin":
+                subprocess.run([
+                    "osascript", "-e",
+                    f'display notification "{message}" with title "{title}"'
+                ], capture_output=True, timeout=5)
+            elif system == "Windows":
+                # Use PowerShell toast notification
+                ps = (f'[Windows.UI.Notifications.ToastNotificationManager, '
+                      f'Windows.UI.Notifications, ContentType = WindowsRuntime] > $null; '
+                      f'$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent(0); '
+                      f'$xml.GetElementsByTagName("text")[0].AppendChild($xml.CreateTextNode("{title}: {message}")) > $null; '
+                      f'[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("HumDrop").Show('
+                      f'[Windows.UI.Notifications.ToastNotification]::new($xml))')
+                subprocess.run(["powershell", "-Command", ps], capture_output=True, timeout=5)
+            else:
+                subprocess.run(["notify-send", title, message], capture_output=True, timeout=5)
+        except Exception:
+            pass  # Notifications are best-effort
+
     def _find_camera(self):
         self.find_btn.configure(state="disabled")
 
@@ -1901,6 +2193,157 @@ class HumDropApp(ctk.CTk):
         ex = self.camera.naming_scheme.example(self.camera.naming_prefix)
         self.example_label.configure(text=f"e.g. {ex}")
 
+    def _show_profiles(self):
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Camera Profiles")
+        dlg.geometry("400x360")
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        dlg.grab_set()
+
+        ctk.CTkLabel(dlg, text="Camera Profiles", font=ctk.CTkFont(size=18, weight="bold")).pack(
+            padx=16, pady=(12, 4))
+        ctk.CTkLabel(dlg, text="Save and switch between camera configurations",
+                     font=ctk.CTkFont(size=14), text_color=TEXT_SEC).pack(padx=16)
+
+        profiles = self.camera.load_profiles()
+
+        # Profile list
+        list_frame = ctk.CTkFrame(dlg, fg_color=BG_CARD, corner_radius=8)
+        list_frame.pack(fill="both", expand=True, padx=16, pady=(8, 0))
+
+        profile_var = ctk.StringVar()
+
+        def refresh_list():
+            nonlocal profiles
+            profiles = self.camera.load_profiles()
+            for w in list_frame.winfo_children():
+                w.destroy()
+            if not profiles:
+                ctk.CTkLabel(list_frame, text="No saved profiles yet.",
+                             font=ctk.CTkFont(size=14), text_color=TEXT_MUTED).pack(pady=16)
+            else:
+                for name, cfg in profiles.items():
+                    row = ctk.CTkFrame(list_frame, fg_color="transparent")
+                    row.pack(fill="x", padx=8, pady=2)
+                    rb = ctk.CTkRadioButton(row, text=f"{name}  ({cfg.get('camera_ip', '?')})",
+                                            variable=profile_var, value=name,
+                                            font=ctk.CTkFont(size=15), text_color=TEXT_PRI,
+                                            fg_color=TEAL, hover_color=TEAL_HOVER,
+                                            border_color=BORDER)
+                    rb.pack(side="left")
+                    ctk.CTkButton(row, text="X", width=28, height=28,
+                                  fg_color="transparent", hover_color=("#ffe0de", "#3a1515"),
+                                  text_color=RED, font=ctk.CTkFont(size=14),
+                                  command=lambda n=name: (self.camera.delete_profile(n), refresh_list())
+                                  ).pack(side="right")
+
+        refresh_list()
+
+        btn_frame = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_frame.pack(pady=(8, 12))
+
+        def save_current():
+            name = ctk.CTkInputDialog(text="Profile name:", title="Save Profile").get_input()
+            if name and name.strip():
+                self.camera.save_profile(name.strip())
+                refresh_list()
+
+        def load_selected():
+            name = profile_var.get()
+            if name and self.camera.apply_profile(name):
+                # Update UI to reflect new settings
+                self.ip_entry.delete(0, "end")
+                self.ip_entry.insert(0, self.camera.camera_ip)
+                self.folder_btn.configure(text=self._short_path(self.camera.video_dir))
+                self.prefix_entry.delete(0, "end")
+                self.prefix_entry.insert(0, self.camera.naming_prefix)
+                self._update_scheme_menu()
+                self._update_example()
+                dlg.destroy()
+                messagebox.showinfo("Profile Loaded", f"Switched to profile: {name}")
+
+        ctk.CTkButton(btn_frame, text="Save Current", width=120, height=34,
+                      fg_color=TEAL, hover_color=TEAL_HOVER, text_color="white",
+                      font=ctk.CTkFont(size=15), command=save_current).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(btn_frame, text="Load Selected", width=120, height=34,
+                      fg_color=ORANGE, hover_color=ORANGE_HOVER, text_color="white",
+                      font=ctk.CTkFont(size=15), command=load_selected).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(btn_frame, text="Close", width=80, height=34,
+                      fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI,
+                      font=ctk.CTkFont(size=15), command=dlg.destroy).pack(side="left")
+
+    def _log_session(self, action: str, file_count: int, auto_deleted: int = 0, notes: str = ""):
+        self.camera.log_session(action, file_count, auto_deleted=auto_deleted, notes=notes)
+
+    def _show_history(self):
+        history = self.camera.get_history()
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Sync History")
+        dlg.geometry("520x420")
+        dlg.resizable(True, True)
+        dlg.transient(self)
+        dlg.grab_set()
+
+        ctk.CTkLabel(dlg, text="Sync History", font=ctk.CTkFont(size=18, weight="bold")).pack(
+            padx=16, pady=(12, 4))
+
+        # Scrollable text area
+        text_frame = ctk.CTkFrame(dlg, fg_color=BG_CARD, corner_radius=8)
+        text_frame.pack(fill="both", expand=True, padx=16, pady=(4, 8))
+
+        text_box = tk.Text(text_frame, wrap="word", bg=self._resolve(BG_CARD),
+                           fg=self._resolve(TEXT_PRI), font=("Courier", 13),
+                           relief="flat", bd=0, highlightthickness=0)
+        scrollbar = ctk.CTkScrollbar(text_frame, command=text_box.yview)
+        text_box.configure(yscrollcommand=scrollbar.set)
+        text_box.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=8)
+        scrollbar.pack(side="right", fill="y", padx=(0, 4), pady=4)
+
+        if not history:
+            text_box.insert("1.0", "No sync history yet.\n\nHistory is recorded after each download.")
+        else:
+            for entry in reversed(history):
+                ts = entry.get("timestamp", "?")[:19].replace("T", " ")
+                action = entry.get("action", "?")
+                count = entry.get("files", 0)
+                deleted = entry.get("auto_deleted", 0)
+                ip = entry.get("camera_ip", "")
+                notes = entry.get("notes", "")
+                line = f"{ts}  {action}: {count} files"
+                if deleted:
+                    line += f", {deleted} auto-deleted"
+                if ip:
+                    line += f"  [{ip}]"
+                if notes:
+                    line += f"  ({notes})"
+                text_box.insert("end", line + "\n")
+        text_box.configure(state="disabled")
+
+        btn_frame = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_frame.pack(pady=(0, 12))
+
+        def export_csv():
+            path = filedialog.asksaveasfilename(
+                defaultextension=".csv", filetypes=[("CSV", "*.csv")],
+                title="Export History", initialfile="humdrop_history.csv")
+            if path:
+                with open(path, "w") as f:
+                    f.write("timestamp,action,files,auto_deleted,camera_ip,save_folder,notes\n")
+                    for e in history:
+                        row = [str(e.get(k, "")) for k in
+                               ["timestamp", "action", "files", "auto_deleted",
+                                "camera_ip", "save_folder", "notes"]]
+                        f.write(",".join(row) + "\n")
+                messagebox.showinfo("Exported", f"History exported to:\n{path}")
+
+        ctk.CTkButton(btn_frame, text="Export CSV", width=120, height=34,
+                      fg_color=TEAL, hover_color=TEAL_HOVER, text_color="white",
+                      font=ctk.CTkFont(size=15), command=export_csv).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(btn_frame, text="Close", width=100, height=34,
+                      fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI,
+                      font=ctk.CTkFont(size=15), command=dlg.destroy).pack(side="left")
+
     def _show_about(self):
         about = ctk.CTkToplevel(self)
         about.title("About HumDrop")
@@ -1923,7 +2366,7 @@ class HumDropApp(ctk.CTk):
         ctk.CTkLabel(banner_inner, text="HumDrop",
                      font=ctk.CTkFont(size=26, weight="bold"),
                      text_color="white").pack(pady=(2, 0))
-        ctk.CTkLabel(banner_inner, text="v0.06  \u2022  Camera Sync",
+        ctk.CTkLabel(banner_inner, text="v0.07  \u2022  Camera Sync",
                      font=ctk.CTkFont(size=15),
                      text_color=TEAL_HOVER).pack()
 
