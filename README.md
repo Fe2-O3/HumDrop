@@ -30,35 +30,26 @@ HumDrop connects directly to the camera over your local WiFi and pulls the **ori
 
 ## Install
 
-### Download (recommended)
+### macOS
 
-<table>
-<tr>
-<td><strong>macOS</strong></td>
-<td><a href="https://github.com/Fe2-O3/HumDrop/releases/latest">HumDrop-macOS.zip</a></td>
-<td>Universal &mdash; Apple Silicon + Intel</td>
-</tr>
-<tr>
-<td><strong>Windows</strong></td>
-<td><a href="https://github.com/Fe2-O3/HumDrop/releases/latest">HumDrop-Windows.zip</a></td>
-<td>Extract folder, run <code>HumDrop.exe</code></td>
-</tr>
-<tr>
-<td><strong>Linux</strong></td>
-<td><a href="https://github.com/Fe2-O3/HumDrop/releases/latest">HumDrop-Linux.tar.gz</a></td>
-<td>Extract, run <code>./HumDrop</code></td>
-</tr>
-</table>
-
-### Homebrew (macOS &mdash; recommended)
+**Homebrew (recommended)** &mdash; builds from source, no Gatekeeper warning:
 
 ```bash
 brew install Fe2-O3/tap/humdrop
+humdrop
 ```
 
-Builds from source &mdash; no Gatekeeper warning, no code signing needed. Then just run `humdrop` from Terminal.
+Or [download HumDrop-macOS.zip](https://github.com/Fe2-O3/HumDrop/releases/latest) directly (see [first launch notes](#first-launch)).
 
-### Run from Source
+### Windows
+
+[Download HumDrop-Windows.zip](https://github.com/Fe2-O3/HumDrop/releases/latest) &mdash; extract the folder, run `HumDrop.exe` (see [first launch notes](#first-launch)).
+
+### Linux
+
+[Download HumDrop-Linux.tar.gz](https://github.com/Fe2-O3/HumDrop/releases/latest) &mdash; extract, run `./HumDrop`. Requires a desktop environment.
+
+### Run from Source (all platforms)
 
 ```bash
 git clone https://github.com/Fe2-O3/HumDrop.git
