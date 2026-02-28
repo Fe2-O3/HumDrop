@@ -684,6 +684,7 @@ class HumDropApp(ctk.CTk):
         self.is_connected = False
         self.is_downloading = False
         self._download_cancel = False
+        self.auto_delete_var = ctk.BooleanVar(value=False)
 
         self.title("HumDrop")
         self.geometry("720x800")
@@ -920,11 +921,12 @@ class HumDropApp(ctk.CTk):
         btn_frame.grid(row=0, column=2, rowspan=2, sticky="ne", padx=20, pady=(10, 0))
 
         self.connect_btn = ctk.CTkButton(btn_frame, text="Connect", width=100, fg_color=TEAL,
-                                          hover_color=TEAL_HOVER, command=self._connect)
+                                          hover_color=TEAL_HOVER, text_color="white",
+                                          command=self._connect)
         self.connect_btn.pack(pady=(0, 4))
 
         ctk.CTkButton(btn_frame, text="About", width=100, fg_color=TEAL,
-                      hover_color=TEAL_HOVER,
+                      hover_color=TEAL_HOVER, text_color="white",
                       command=self._show_about).pack()
 
         # IP row
@@ -940,7 +942,7 @@ class HumDropApp(ctk.CTk):
 
         self.find_btn = ctk.CTkButton(ip_frame, text="Find", width=50, height=28,
                                        fg_color=TEAL, hover_color=TEAL_HOVER,
-                                       command=self._find_camera)
+                                       text_color="white", command=self._find_camera)
         self.find_btn.pack(side="left", padx=(0, 10))
 
         # Status dot + label
@@ -967,6 +969,13 @@ class HumDropApp(ctk.CTk):
             command=self._change_folder
         )
         self.folder_btn.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+
+        self.openfolder_btn = ctk.CTkButton(
+            folder_frame, text="Open Folder", width=90, height=28,
+            fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI,
+            command=self._open_folder
+        )
+        self.openfolder_btn.grid(row=0, column=2, sticky="e", padx=(8, 0))
 
         # --- Main content area ---
         self.content = ctk.CTkFrame(self, fg_color="transparent")
@@ -1077,23 +1086,33 @@ class HumDropApp(ctk.CTk):
                                           command=self._refresh)
         self.refresh_btn.grid(row=0, column=0, sticky="w")
 
-        self.download_btn = ctk.CTkButton(action_frame, text="Download Selected", width=150,
+        self.download_btn = ctk.CTkButton(action_frame, text="Download Selected", width=160,
                                            fg_color=TEAL, hover_color=TEAL_HOVER,
-                                           command=self._download)
+                                           text_color="white", command=self._download)
         self.download_btn.grid(row=0, column=1)
 
-        self.openfolder_btn = ctk.CTkButton(action_frame, text="Open Folder", width=90,
-                                             fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI,
-                                             command=self._open_folder)
-        self.openfolder_btn.grid(row=0, column=2, sticky="e")
+        self.delete_btn = ctk.CTkButton(action_frame, text="Delete Selected", width=120,
+                                         fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI,
+                                         command=self._delete_selected)
+        self.delete_btn.grid(row=0, column=2, sticky="e")
+
+        # Auto-delete checkbox
+        self.auto_delete_cb = ctk.CTkCheckBox(
+            f, text="Auto-delete from camera after download",
+            variable=self.auto_delete_var,
+            font=ctk.CTkFont(size=13), text_color=TEXT_SEC,
+            fg_color=TEAL, hover_color=TEAL_HOVER,
+            border_color=BORDER, checkmark_color="white"
+        )
+        self.auto_delete_cb.grid(row=6, column=0, sticky="w", padx=24, pady=(6, 0))
 
         # Separator
         sep = ctk.CTkFrame(f, height=1, fg_color=BORDER)
-        sep.grid(row=6, column=0, sticky="ew", padx=20, pady=(12, 0))
+        sep.grid(row=7, column=0, sticky="ew", padx=20, pady=(12, 0))
 
         # Naming config
         naming_frame = ctk.CTkFrame(f, fg_color="transparent")
-        naming_frame.grid(row=7, column=0, sticky="ew", padx=20, pady=(8, 0))
+        naming_frame.grid(row=8, column=0, sticky="ew", padx=20, pady=(8, 0))
 
         ctk.CTkLabel(naming_frame, text="Naming", font=ctk.CTkFont(size=13, weight="bold")).pack(side="left")
 
@@ -1109,7 +1128,7 @@ class HumDropApp(ctk.CTk):
         self.scheme_menu.pack(side="left", padx=(8, 0))
 
         prefix_frame = ctk.CTkFrame(f, fg_color="transparent")
-        prefix_frame.grid(row=8, column=0, sticky="ew", padx=20, pady=(4, 0))
+        prefix_frame.grid(row=9, column=0, sticky="ew", padx=20, pady=(4, 0))
 
         self.prefix_label_w = ctk.CTkLabel(prefix_frame, text="Prefix:", font=ctk.CTkFont(size=13),
                                             text_color=TEXT_SEC)
@@ -1127,12 +1146,16 @@ class HumDropApp(ctk.CTk):
         self.example_label.pack(side="left", padx=(8, 0))
         self._update_example()
 
+        # Separator 2
+        sep2 = ctk.CTkFrame(f, height=1, fg_color=BORDER)
+        sep2.grid(row=10, column=0, sticky="ew", padx=20, pady=(12, 0))
+
         # Bottom buttons
         bottom_frame = ctk.CTkFrame(f, fg_color="transparent")
-        bottom_frame.grid(row=9, column=0, sticky="ew", padx=20, pady=(10, 16))
+        bottom_frame.grid(row=11, column=0, sticky="ew", padx=20, pady=(10, 16))
         bottom_frame.grid_columnconfigure(1, weight=1)
 
-        self.clean_btn = ctk.CTkButton(bottom_frame, text="Delete Downloaded from Camera", width=240, height=32,
+        self.clean_btn = ctk.CTkButton(bottom_frame, text="Delete Synced from Camera", width=220, height=32,
                                         fg_color="transparent", border_width=1, border_color=BORDER,
                                         text_color=TEXT_PRI, hover_color=BTN_SEC,
                                         font=ctk.CTkFont(size=13),
@@ -1276,10 +1299,7 @@ class HumDropApp(ctk.CTk):
             if self.is_downloading:
                 self._download_cancel = True
                 self.is_downloading = False
-                self.download_btn.configure(state="normal")
-                self.refresh_btn.configure(state="normal")
-                self.clean_btn.configure(state="normal")
-                self.wipe_btn.configure(state="normal")
+                self._re_enable_buttons()
                 self._hide_progress()
             self.camera.cleanup()
             self.is_connected = False
@@ -1326,8 +1346,7 @@ class HumDropApp(ctk.CTk):
     def _refresh(self):
         if not self.is_connected:
             return
-        self.refresh_btn.configure(state="disabled")
-        self.download_btn.configure(state="disabled")
+        self._disable_buttons()
         self._update_status("Scanning camera...")
 
         # Show indeterminate progress bar while scanning
@@ -1354,8 +1373,7 @@ class HumDropApp(ctk.CTk):
         self.files = found
         self._refresh_table()
         self._update_summary()
-        self.refresh_btn.configure(state="normal")
-        self.download_btn.configure(state="normal")
+        self._re_enable_buttons()
         self._update_status("Connected (no files found)" if not found else "Connected", connected=True)
 
     def _download(self):
@@ -1376,10 +1394,7 @@ class HumDropApp(ctk.CTk):
 
         self.is_downloading = True
         self._download_cancel = False
-        self.download_btn.configure(state="disabled")
-        self.refresh_btn.configure(state="disabled")
-        self.clean_btn.configure(state="disabled")
-        self.wipe_btn.configure(state="disabled")
+        self._disable_buttons()
         self.progress_bar.grid(row=3, column=0, sticky="ew", padx=20, pady=(8, 0))
         self.progress_label.grid(row=4, column=0, sticky="w", padx=20, pady=(2, 0))
         self.progress_bar.set(0)
@@ -1388,6 +1403,7 @@ class HumDropApp(ctk.CTk):
 
         def download_seq():
             completed_count = 0
+            auto_deleted_count = 0
             connection_lost = False
             for completed, (idx, file) in enumerate(selected):
                 # Check cancel flag before each file
@@ -1429,6 +1445,15 @@ class HumDropApp(ctk.CTk):
                     self.files[idx].is_downloaded = True
                     self.files[idx].selected = False
                     self.after(0, self._refresh_table)
+
+                    # Per-file auto-delete: remove from camera right after download
+                    if self.auto_delete_var.get():
+                        self.after(0, lambda n=file.name, c=completed:
+                            self.progress_label.configure(
+                                text=f"Auto-deleting {n} from camera ({c + 1}/{total})..."))
+                        self.camera.delete_file(file)
+                        auto_deleted_count += 1
+                        self.camera.log(f"[AUTO-DELETE] {file.name} deleted from camera")
                 else:
                     # Download failed — check if camera is still reachable
                     if not self.camera.is_reachable():
@@ -1437,17 +1462,16 @@ class HumDropApp(ctk.CTk):
                         break
 
             self.after(0, lambda: self._download_done(
-                completed_count, connection_lost=connection_lost))
+                completed_count, connection_lost=connection_lost,
+                auto_deleted=auto_deleted_count))
 
         threading.Thread(target=download_seq, daemon=True).start()
 
-    def _download_done(self, total: int, connection_lost: bool = False):
+    def _download_done(self, total: int, connection_lost: bool = False,
+                        auto_deleted: int = 0):
         self.is_downloading = False
         self._download_cancel = False
-        self.download_btn.configure(state="normal")
-        self.refresh_btn.configure(state="normal")
-        self.clean_btn.configure(state="normal")
-        self.wipe_btn.configure(state="normal")
+        self._re_enable_buttons()
 
         if connection_lost:
             self.progress_bar.set(0)
@@ -1457,13 +1481,31 @@ class HumDropApp(ctk.CTk):
             self.is_connected = False
             self.camera.cleanup()
             self.connect_btn.configure(text="Connect")
-            # Don't switch to disconnected view — keep file list visible
-            # so user can see what was/wasn't downloaded
             self.accent_strip.configure(fg_color=TEAL)
             self.table_frame.configure(border_width=0)
             self._refresh_table()
             self._update_summary()
             self.after(8000, self._hide_progress)
+        elif auto_deleted > 0:
+            # Auto-delete happened — refresh the camera file list
+            self.progress_bar.set(1.0)
+            msg = f"Downloaded {total} files, auto-deleted {auto_deleted} from camera."
+            self.progress_label.configure(text=msg)
+            self._update_status("Refreshing...")
+            self._refresh_table()
+            self._update_summary()
+
+            # Transition to indeterminate for refresh
+            self.progress_bar.configure(mode="indeterminate")
+            self.progress_bar.start()
+            self.progress_label.configure(text=f"{msg} Refreshing\u2026")
+
+            def do_refresh():
+                found = self.camera.list_files()
+                self.after(0, lambda: self._download_auto_delete_refresh_done(
+                    found, total, auto_deleted))
+
+            threading.Thread(target=do_refresh, daemon=True).start()
         else:
             self.progress_bar.set(1.0)
             self.progress_label.configure(text=f"Done! Downloaded {total} files.")
@@ -1471,34 +1513,116 @@ class HumDropApp(ctk.CTk):
             self._update_summary()
             self.after(4000, self._hide_progress)
 
+    def _download_auto_delete_refresh_done(self, found: list, downloaded: int,
+                                            deleted: int):
+        """Post-auto-delete refresh: update file list and show final status."""
+        self.progress_bar.stop()
+        self.progress_bar.configure(mode="determinate")
+        self.progress_bar.set(1.0)
+        self.progress_label.configure(
+            text=f"Done! Downloaded {downloaded} files, deleted {deleted} from camera.")
+        self._update_status("Connected", connected=True)
+        self.files = found
+        self._refresh_table()
+        self._update_summary()
+        self.after(4000, self._hide_progress)
+
     def _hide_progress(self):
         self.progress_bar.grid_forget()
         self.progress_label.grid_forget()
 
+    def _re_enable_buttons(self):
+        """Centralized helper to re-enable all action buttons."""
+        self.download_btn.configure(state="normal")
+        self.refresh_btn.configure(state="normal")
+        self.clean_btn.configure(state="normal")
+        self.wipe_btn.configure(state="normal")
+        self.delete_btn.configure(state="normal")
+        self.auto_delete_cb.configure(state="normal")
+
+    def _disable_buttons(self):
+        """Centralized helper to disable all action buttons during operations."""
+        self.download_btn.configure(state="disabled")
+        self.refresh_btn.configure(state="disabled")
+        self.clean_btn.configure(state="disabled")
+        self.wipe_btn.configure(state="disabled")
+        self.delete_btn.configure(state="disabled")
+        self.auto_delete_cb.configure(state="disabled")
+
+    def _delete_selected(self):
+        """Delete checked/selected files from camera with progress bar."""
+        selected = [f for f in self.files if f.selected]
+        if not selected:
+            messagebox.showinfo("Nothing Selected", "Select files to delete by checking the boxes in the list.")
+            return
+        if not messagebox.askyesno("Delete Selected Files?",
+                                    f"Delete {len(selected)} selected files from the camera?\n"
+                                    "This cannot be undone."):
+            return
+        self._do_delete(selected)
+
+    def _do_delete(self, files_to_delete: list, status_prefix: str = "Deleting"):
+        """Delete files from camera with progress bar feedback, then auto-refresh."""
+        self._disable_buttons()
+        total = len(files_to_delete)
+        self.progress_bar.configure(mode="determinate")
+        self.progress_bar.set(0)
+        self.progress_bar.grid(row=3, column=0, sticky="ew", padx=20, pady=(8, 0))
+        self.progress_label.grid(row=4, column=0, sticky="w", padx=20, pady=(2, 0))
+        self._update_status(f"{status_prefix}...")
+
+        def do_delete():
+            for i, f in enumerate(files_to_delete):
+                def update_ui(name=f.name, n=i):
+                    self.progress_label.configure(
+                        text=f"{status_prefix} {name} ({n + 1}/{total})...")
+                    self.progress_bar.set((n + 1) / total)
+                self.after(0, update_ui)
+                self.camera.delete_file(f)
+            self.after(0, lambda: self._delete_done(total))
+
+        threading.Thread(target=do_delete, daemon=True).start()
+
+    def _delete_done(self, count: int):
+        """Post-delete: show done briefly, then refresh file list."""
+        self.progress_bar.set(1.0)
+        self.progress_label.configure(text=f"Deleted {count} files. Refreshing...")
+        self._update_status("Refreshing...")
+
+        # Transition to indeterminate for the refresh
+        self.progress_bar.configure(mode="indeterminate")
+        self.progress_bar.start()
+
+        def do_refresh():
+            found = self.camera.list_files()
+            self.after(0, lambda: self._delete_refresh_done(found, count))
+
+        threading.Thread(target=do_refresh, daemon=True).start()
+
+    def _delete_refresh_done(self, found: list, deleted_count: int):
+        """Post-delete refresh complete: update UI and re-enable."""
+        self.progress_bar.stop()
+        self.progress_bar.configure(mode="determinate")
+        self.progress_bar.set(1.0)
+        self.progress_label.configure(text=f"Done! Deleted {deleted_count} files from camera.")
+        self._update_status("Connected", connected=True)
+
+        self.files = found
+        self._refresh_table()
+        self._update_summary()
+        self._re_enable_buttons()
+        self.after(4000, self._hide_progress)
+
     def _clean(self):
         downloaded = [f for f in self.files if f.is_downloaded]
         if not downloaded:
-            messagebox.showinfo("Nothing to Clean", "No downloaded files to remove from camera.")
+            messagebox.showinfo("Nothing to Delete", "No synced files to remove from camera.")
             return
-        if not messagebox.askyesno("Delete Downloaded Files?",
-                                    f"Delete {len(downloaded)} files from the camera\n"
-                                    "that have already been downloaded?"):
+        if not messagebox.askyesno("Delete Synced Files?",
+                                    f"Delete {len(downloaded)} synced files from the camera?\n"
+                                    "These have already been downloaded to your computer."):
             return
-        self.clean_btn.configure(state="disabled")
-        self._update_status("Cleaning...")
-
-        def do_clean():
-            for f in downloaded:
-                self.camera.delete_file(f)
-                time.sleep(0.5)
-            self.after(0, lambda: self._clean_done())
-
-        threading.Thread(target=do_clean, daemon=True).start()
-
-    def _clean_done(self):
-        self.clean_btn.configure(state="normal")
-        self._update_status("Connected", connected=True)
-        self._refresh()
+        self._do_delete(downloaded, status_prefix="Deleting synced")
 
     def _wipe(self):
         if not messagebox.askyesno("Wipe ALL Files?",
@@ -1510,19 +1634,42 @@ class HumDropApp(ctk.CTk):
                                     "All camera files will be permanently deleted.",
                                     icon="warning"):
             return
-        self.wipe_btn.configure(state="disabled")
-        self._update_status("Wiping...")
+        self._disable_buttons()
+        self._update_status("Wiping all files...")
+        self.progress_bar.configure(mode="indeterminate")
+        self.progress_bar.grid(row=3, column=0, sticky="ew", padx=20, pady=(8, 0))
+        self.progress_bar.start()
+        self.progress_label.configure(text="Wiping all camera files\u2026")
+        self.progress_label.grid(row=4, column=0, sticky="w", padx=20, pady=(2, 0))
 
         def do_wipe():
             self.camera.wipe_all()
-            self.after(0, lambda: self._wipe_done())
+            self.after(0, self._wipe_done)
 
         threading.Thread(target=do_wipe, daemon=True).start()
 
     def _wipe_done(self):
-        self.wipe_btn.configure(state="normal")
+        self.progress_label.configure(text="Wipe complete. Refreshing\u2026")
+        self._update_status("Refreshing...")
+
+        def do_refresh():
+            found = self.camera.list_files()
+            self.after(0, lambda: self._wipe_refresh_done(found))
+
+        threading.Thread(target=do_refresh, daemon=True).start()
+
+    def _wipe_refresh_done(self, found: list):
+        self.progress_bar.stop()
+        self.progress_bar.configure(mode="determinate")
+        self.progress_bar.set(1.0)
+        self.progress_label.configure(text="Done! All camera files wiped.")
         self._update_status("Connected", connected=True)
-        self._refresh()
+
+        self.files = found
+        self._refresh_table()
+        self._update_summary()
+        self._re_enable_buttons()
+        self.after(4000, self._hide_progress)
 
     def _select_all(self):
         for f in self.files:
@@ -1648,11 +1795,12 @@ class HumDropApp(ctk.CTk):
 
         kofi_btn = ctk.CTkButton(about, text="Support on Ko-fi", width=140, height=30,
                                   fg_color=ORANGE, hover_color=ORANGE_HOVER,
+                                  text_color="white",
                                   command=lambda: webbrowser.open("https://ko-fi.com/fe2_o3"))
         kofi_btn.pack(pady=(16, 0))
 
         ctk.CTkButton(about, text="OK", width=80, fg_color=TEAL, hover_color=TEAL_HOVER,
-                      command=about.destroy).pack(pady=(12, 0))
+                      text_color="white", command=about.destroy).pack(pady=(12, 0))
 
     def _on_close(self):
         self.camera.cleanup()
