@@ -868,10 +868,10 @@ class HumDropApp(ctk.CTk):
         style.theme_use("clam")
         style.configure("Dark.Treeview",
                         background=bg, foreground=fg, fieldbackground=bg,
-                        rowheight=30, borderwidth=0, relief="flat", font=("", 13))
+                        rowheight=32, borderwidth=0, relief="flat", font=("", 14))
         style.configure("Dark.Treeview.Heading",
                         background=heading_bg, foreground=heading_fg,
-                        borderwidth=0, relief="flat", font=("", 13, "bold"))
+                        borderwidth=0, relief="flat", font=("", 14, "bold"))
         style.map("Dark.Treeview",
                   background=[("selected", TEAL_DARK)],
                   foreground=[("selected", "white")])
@@ -912,8 +912,8 @@ class HumDropApp(ctk.CTk):
         title_frame = ctk.CTkFrame(header, fg_color="transparent")
         title_frame.grid(row=0, column=0, columnspan=3, sticky="w", padx=20, pady=(12, 0))
 
-        ctk.CTkLabel(title_frame, text="HumDrop", font=ctk.CTkFont(size=20, weight="bold")).pack(side="left")
-        ctk.CTkLabel(title_frame, text="Camera Sync", font=ctk.CTkFont(size=12),
+        ctk.CTkLabel(title_frame, text="HumDrop", font=ctk.CTkFont(size=22, weight="bold")).pack(side="left")
+        ctk.CTkLabel(title_frame, text="Camera Sync", font=ctk.CTkFont(size=14),
                      text_color=TEAL).pack(side="left", padx=(8, 0), pady=(4, 0))
 
         # Right side buttons
@@ -933,10 +933,10 @@ class HumDropApp(ctk.CTk):
         ip_frame = ctk.CTkFrame(header, fg_color="transparent")
         ip_frame.grid(row=1, column=0, columnspan=2, sticky="w", padx=20, pady=(6, 0))
 
-        ctk.CTkLabel(ip_frame, text="Camera IP", font=ctk.CTkFont(size=13),
+        ctk.CTkLabel(ip_frame, text="Camera IP", font=ctk.CTkFont(size=14),
                      text_color=TEXT_SEC).pack(side="left")
 
-        self.ip_entry = ctk.CTkEntry(ip_frame, width=140, font=ctk.CTkFont(family="Courier", size=12))
+        self.ip_entry = ctk.CTkEntry(ip_frame, width=140, font=ctk.CTkFont(family="Courier", size=14))
         self.ip_entry.pack(side="left", padx=(8, 4))
         self.ip_entry.insert(0, self.camera.camera_ip)
 
@@ -946,11 +946,11 @@ class HumDropApp(ctk.CTk):
         self.find_btn.pack(side="left", padx=(0, 10))
 
         # Status dot + label
-        self.status_dot = ctk.CTkLabel(ip_frame, text="\u25CF", font=ctk.CTkFont(size=14),
+        self.status_dot = ctk.CTkLabel(ip_frame, text="\u25CF", font=ctk.CTkFont(size=16),
                                         text_color=RED, width=16)
         self.status_dot.pack(side="left")
 
-        self.status_label = ctk.CTkLabel(ip_frame, text="Disconnected", font=ctk.CTkFont(size=13),
+        self.status_label = ctk.CTkLabel(ip_frame, text="Disconnected", font=ctk.CTkFont(size=14),
                                           text_color=TEXT_SEC)
         self.status_label.pack(side="left", padx=(4, 0))
 
@@ -959,19 +959,19 @@ class HumDropApp(ctk.CTk):
         folder_frame.grid(row=2, column=0, columnspan=3, sticky="ew", padx=20, pady=(6, 12))
         folder_frame.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(folder_frame, text="Save to:", font=ctk.CTkFont(size=12),
+        ctk.CTkLabel(folder_frame, text="Save to:", font=ctk.CTkFont(size=14),
                      text_color=TEXT_SEC).grid(row=0, column=0, sticky="w")
 
         self.folder_btn = ctk.CTkButton(
             folder_frame, text=self._short_path(self.camera.video_dir),
-            font=ctk.CTkFont(family="Courier", size=13), anchor="w",
-            fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI, height=28,
+            font=ctk.CTkFont(family="Courier", size=14), anchor="w",
+            fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI, height=30,
             command=self._change_folder
         )
         self.folder_btn.grid(row=0, column=1, sticky="ew", padx=(8, 0))
 
         self.openfolder_btn = ctk.CTkButton(
-            folder_frame, text="Open Folder", width=90, height=28,
+            folder_frame, text="Open Folder", width=100, height=30,
             fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI,
             command=self._open_folder
         )
@@ -1000,7 +1000,7 @@ class HumDropApp(ctk.CTk):
                      "3.  Make sure you're on the same Wi-Fi network\n"
                      '4.  Enter the camera IP, or tap "Find" to auto-discover,\n'
                      '     then "Connect"',
-                     font=ctk.CTkFont(size=13), text_color=TEXT_SEC,
+                     font=ctk.CTkFont(size=14), text_color=TEXT_SEC,
                      justify="left").pack()
 
         # Files section
@@ -1018,15 +1018,15 @@ class HumDropApp(ctk.CTk):
         hdr.grid(row=0, column=0, sticky="ew", padx=20, pady=(12, 0))
         hdr.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(hdr, text="Files", font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(hdr, text="Files", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, sticky="w")
 
         btn_row = ctk.CTkFrame(hdr, fg_color="transparent")
         btn_row.grid(row=0, column=1, sticky="e")
 
-        ctk.CTkButton(btn_row, text="Select All", width=85, height=28, font=ctk.CTkFont(size=13),
+        ctk.CTkButton(btn_row, text="Select All", width=90, height=30, font=ctk.CTkFont(size=14),
                       fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI,
                       command=self._select_all).pack(side="left", padx=(0, 4))
-        ctk.CTkButton(btn_row, text="Select New", width=85, height=28, font=ctk.CTkFont(size=13),
+        ctk.CTkButton(btn_row, text="Select New", width=90, height=30, font=ctk.CTkFont(size=14),
                       fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI,
                       command=self._select_new).pack(side="left")
 
@@ -1068,13 +1068,13 @@ class HumDropApp(ctk.CTk):
         self.tree.bind("<Button-1>", self._on_tree_click)
 
         # Summary
-        self.summary_label = ctk.CTkLabel(f, text="", font=ctk.CTkFont(size=13), text_color=TEXT_SEC)
+        self.summary_label = ctk.CTkLabel(f, text="", font=ctk.CTkFont(size=14), text_color=TEXT_SEC)
         self.summary_label.grid(row=2, column=0, sticky="w", padx=20, pady=(4, 0))
 
         # Progress
         self.progress_bar = ctk.CTkProgressBar(f, fg_color=BG_CARD, progress_color=TEAL, height=8)
         self.progress_bar.set(0)
-        self.progress_label = ctk.CTkLabel(f, text="", font=ctk.CTkFont(size=13), text_color=TEXT_SEC)
+        self.progress_label = ctk.CTkLabel(f, text="", font=ctk.CTkFont(size=14), text_color=TEXT_SEC)
 
         # Action buttons
         action_frame = ctk.CTkFrame(f, fg_color="transparent")
@@ -1100,7 +1100,7 @@ class HumDropApp(ctk.CTk):
         self.auto_delete_cb = ctk.CTkCheckBox(
             f, text="Auto-delete from camera after download",
             variable=self.auto_delete_var,
-            font=ctk.CTkFont(size=13), text_color=TEXT_SEC,
+            font=ctk.CTkFont(size=14), text_color=TEXT_SEC,
             fg_color=TEAL, hover_color=TEAL_HOVER,
             border_color=BORDER, checkmark_color="white"
         )
@@ -1114,13 +1114,13 @@ class HumDropApp(ctk.CTk):
         naming_frame = ctk.CTkFrame(f, fg_color="transparent")
         naming_frame.grid(row=8, column=0, sticky="ew", padx=20, pady=(8, 0))
 
-        ctk.CTkLabel(naming_frame, text="Naming", font=ctk.CTkFont(size=13, weight="bold")).pack(side="left")
+        ctk.CTkLabel(naming_frame, text="Naming", font=ctk.CTkFont(size=14, weight="bold")).pack(side="left")
 
         scheme_values = [f"{s.display_name}  ({s.example(self.camera.naming_prefix)})" for s in NamingScheme]
         self.scheme_var = ctk.StringVar(value=scheme_values[list(NamingScheme).index(self.camera.naming_scheme)])
         self.scheme_menu = ctk.CTkOptionMenu(
             naming_frame, values=scheme_values, variable=self.scheme_var,
-            width=280, height=30, font=ctk.CTkFont(size=13),
+            width=300, height=32, font=ctk.CTkFont(size=14),
             fg_color=BTN_SEC, text_color=TEXT_PRI,
             button_color=ORANGE, button_hover_color=ORANGE_HOVER,
             command=self._scheme_changed
@@ -1130,18 +1130,18 @@ class HumDropApp(ctk.CTk):
         prefix_frame = ctk.CTkFrame(f, fg_color="transparent")
         prefix_frame.grid(row=9, column=0, sticky="ew", padx=20, pady=(4, 0))
 
-        self.prefix_label_w = ctk.CTkLabel(prefix_frame, text="Prefix:", font=ctk.CTkFont(size=13),
+        self.prefix_label_w = ctk.CTkLabel(prefix_frame, text="Prefix:", font=ctk.CTkFont(size=14),
                                             text_color=TEXT_SEC)
         self.prefix_label_w.pack(side="left")
 
-        self.prefix_entry = ctk.CTkEntry(prefix_frame, width=140, height=28,
-                                          font=ctk.CTkFont(family="Courier", size=13))
+        self.prefix_entry = ctk.CTkEntry(prefix_frame, width=140, height=30,
+                                          font=ctk.CTkFont(family="Courier", size=14))
         self.prefix_entry.pack(side="left", padx=(4, 0))
         self.prefix_entry.insert(0, self.camera.naming_prefix)
         self.prefix_entry.bind("<Return>", lambda e: self._prefix_changed())
         self.prefix_entry.bind("<FocusOut>", lambda e: self._prefix_changed())
 
-        self.example_label = ctk.CTkLabel(prefix_frame, text="", font=ctk.CTkFont(family="Courier", size=12),
+        self.example_label = ctk.CTkLabel(prefix_frame, text="", font=ctk.CTkFont(family="Courier", size=13),
                                            text_color=TEXT_MUTED)
         self.example_label.pack(side="left", padx=(8, 0))
         self._update_example()
@@ -1155,17 +1155,17 @@ class HumDropApp(ctk.CTk):
         bottom_frame.grid(row=11, column=0, sticky="ew", padx=20, pady=(10, 16))
         bottom_frame.grid_columnconfigure(1, weight=1)
 
-        self.clean_btn = ctk.CTkButton(bottom_frame, text="Delete Synced from Camera", width=220, height=32,
+        self.clean_btn = ctk.CTkButton(bottom_frame, text="Delete Synced from Camera", width=230, height=34,
                                         fg_color="transparent", border_width=1, border_color=BORDER,
                                         text_color=TEXT_PRI, hover_color=BTN_SEC,
-                                        font=ctk.CTkFont(size=13),
+                                        font=ctk.CTkFont(size=14),
                                         command=self._clean)
         self.clean_btn.grid(row=0, column=0, sticky="w")
 
-        self.wipe_btn = ctk.CTkButton(bottom_frame, text="Wipe All Camera Files", width=180, height=32,
+        self.wipe_btn = ctk.CTkButton(bottom_frame, text="Wipe All Camera Files", width=190, height=34,
                                        fg_color="transparent", border_width=1, border_color=RED,
                                        text_color=RED, hover_color=("#ffe0de", "#3a1515"),
-                                       font=ctk.CTkFont(size=13),
+                                       font=ctk.CTkFont(size=14),
                                        command=self._wipe)
         self.wipe_btn.grid(row=0, column=2, sticky="e")
 
@@ -1193,7 +1193,7 @@ class HumDropApp(ctk.CTk):
         if not hasattr(self, '_spinner_label'):
             self._spinner_label = ctk.CTkLabel(
                 self.instruction_frame, text="",
-                font=ctk.CTkFont(size=14), text_color=TEAL
+                font=ctk.CTkFont(size=15), text_color=TEAL
             )
         self._spinner_label.place(relx=0.5, rely=0.72, anchor="center")
         self._spinner_frames = ["Connecting ●○○", "Connecting ○●○", "Connecting ○○●"]
@@ -1774,33 +1774,84 @@ class HumDropApp(ctk.CTk):
     def _show_about(self):
         about = ctk.CTkToplevel(self)
         about.title("About HumDrop")
-        about.geometry("380x380")
+        about.geometry("420x520")
         about.resizable(False, False)
         about.transient(self)
         about.grab_set()
 
-        bird_c = self._create_bird_canvas(about, size=80)
-        bird_c.pack(pady=(20, 0))
+        # Teal header banner
+        banner = ctk.CTkFrame(about, height=130, fg_color=TEAL_DARK, corner_radius=0)
+        banner.pack(fill="x")
+        banner.pack_propagate(False)
 
-        ctk.CTkLabel(about, text="HumDrop", font=ctk.CTkFont(size=22, weight="bold")).pack(pady=(8, 0))
-        ctk.CTkLabel(about, text="v0.05", font=ctk.CTkFont(size=13), text_color=TEXT_SEC).pack()
-        ctk.CTkLabel(about, text="By Kenneth Russell DeGraff",
-                     font=ctk.CTkFont(size=13)).pack(pady=(8, 0))
-        ctk.CTkLabel(about, text="Sync videos and photos from your camera.",
-                     font=ctk.CTkFont(size=13), text_color=TEXT_SEC).pack(pady=(12, 0))
-        ctk.CTkLabel(about, text=f"Downloads to: {self._short_path(self.camera.video_dir)}",
-                     font=ctk.CTkFont(family="Courier", size=12), text_color=TEXT_SEC).pack(pady=(4, 0))
-        ctk.CTkLabel(about, text=f"Camera IP: {self.camera.camera_ip}",
-                     font=ctk.CTkFont(family="Courier", size=12), text_color=TEXT_SEC).pack()
+        banner_inner = ctk.CTkFrame(banner, fg_color="transparent")
+        banner_inner.place(relx=0.5, rely=0.5, anchor="center")
 
-        kofi_btn = ctk.CTkButton(about, text="Support on Ko-fi", width=140, height=30,
-                                  fg_color=ORANGE, hover_color=ORANGE_HOVER,
-                                  text_color="white",
-                                  command=lambda: webbrowser.open("https://ko-fi.com/fe2_o3"))
-        kofi_btn.pack(pady=(16, 0))
+        bird_c = self._create_bird_canvas(banner_inner, size=64)
+        bird_c.pack()
 
-        ctk.CTkButton(about, text="OK", width=80, fg_color=TEAL, hover_color=TEAL_HOVER,
-                      text_color="white", command=about.destroy).pack(pady=(12, 0))
+        ctk.CTkLabel(banner_inner, text="HumDrop",
+                     font=ctk.CTkFont(size=24, weight="bold"),
+                     text_color="white").pack(pady=(2, 0))
+        ctk.CTkLabel(banner_inner, text="v0.05  \u2022  Camera Sync",
+                     font=ctk.CTkFont(size=14),
+                     text_color=TEAL_HOVER).pack()
+
+        # Body
+        body = ctk.CTkFrame(about, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=24, pady=(16, 0))
+
+        ctk.CTkLabel(body, text="By Kenneth Russell DeGraff",
+                     font=ctk.CTkFont(size=15, weight="bold")).pack()
+        ctk.CTkLabel(body, text="Sync videos and photos from WiFi trail cameras\n"
+                     "directly to your computer over your local network.",
+                     font=ctk.CTkFont(size=14), text_color=TEXT_SEC,
+                     justify="center").pack(pady=(6, 0))
+
+        # Info card
+        info_card = ctk.CTkFrame(body, fg_color=BG_HEADER, corner_radius=8)
+        info_card.pack(fill="x", pady=(12, 0))
+
+        info_inner = ctk.CTkFrame(info_card, fg_color="transparent")
+        info_inner.pack(padx=16, pady=10)
+
+        ctk.CTkLabel(info_inner, text=f"Save folder:  {self._short_path(self.camera.video_dir)}",
+                     font=ctk.CTkFont(family="Courier", size=13),
+                     text_color=TEXT_SEC).pack(anchor="w")
+        ctk.CTkLabel(info_inner, text=f"Camera IP:    {self.camera.camera_ip}",
+                     font=ctk.CTkFont(family="Courier", size=13),
+                     text_color=TEXT_SEC).pack(anchor="w")
+
+        # Buttons
+        btn_frame = ctk.CTkFrame(body, fg_color="transparent")
+        btn_frame.pack(pady=(16, 0))
+
+        ctk.CTkButton(btn_frame, text="\u2B50  GitHub  \u2014  Report Bugs & Contribute",
+                      width=280, height=36,
+                      fg_color=TEAL, hover_color=TEAL_HOVER,
+                      text_color="white", font=ctk.CTkFont(size=14),
+                      command=lambda: webbrowser.open(
+                          "https://github.com/Fe2-O3/HumDrop")
+                      ).pack(pady=(0, 6))
+
+        ctk.CTkButton(btn_frame, text="\u2615  Support on Ko-fi",
+                      width=280, height=36,
+                      fg_color=ORANGE, hover_color=ORANGE_HOVER,
+                      text_color="white", font=ctk.CTkFont(size=14),
+                      command=lambda: webbrowser.open(
+                          "https://ko-fi.com/fe2_o3")
+                      ).pack()
+
+        ctk.CTkLabel(body, text="Feedback, bug reports, feature requests,\n"
+                     "and code contributions welcome on GitHub!",
+                     font=ctk.CTkFont(size=13), text_color=TEXT_MUTED,
+                     justify="center").pack(pady=(10, 0))
+
+        # Close button
+        ctk.CTkButton(about, text="Close", width=100, height=34,
+                      fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER,
+                      text_color=TEXT_PRI, font=ctk.CTkFont(size=14),
+                      command=about.destroy).pack(pady=(8, 16))
 
     def _on_close(self):
         self.camera.cleanup()
