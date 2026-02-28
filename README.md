@@ -13,7 +13,7 @@
   <a href="https://github.com/Fe2-O3/HumDrop/releases/latest"><img src="https://img.shields.io/github/v/release/Fe2-O3/HumDrop?style=flat-square&color=1AB89E&label=Download" alt="Latest Release"></a>&nbsp;
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-1AB89E?style=flat-square" alt="Platform">&nbsp;
   <img src="https://img.shields.io/badge/python-3.9%2B-1AB89E?style=flat-square" alt="Python">&nbsp;
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0%20%2B%20Commons%20Clause-1AB89E?style=flat-square" alt="License"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0%20%2B%20Commons%20Clause-1AB89E?style=flat-square" alt="License"></a>
 </p>
 
 ---
@@ -223,7 +223,7 @@ Automated builds run via GitHub Actions on every version tag &mdash; macOS, Wind
 
 ## License
 
-[Apache 2.0 with Commons Clause](LICENSE) &mdash; free to use, modify, and contribute; cannot be sold.
+[GPL-3.0 with Commons Clause](LICENSE) &mdash; free to use, modify, and contribute; forks must stay open-source; cannot be sold.
 
 ---
 
