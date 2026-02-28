@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HumDrop v0.07 — Cross-platform camera sync utility
+HumDrop v0.08 — Cross-platform camera sync utility
 By Kenneth Russell DeGraff
 
 Syncs videos and photos from WiFi-enabled trail/bird cameras.
@@ -55,35 +55,38 @@ class NamingScheme(Enum):
             NamingScheme.ORIGINAL: "Camera original",
         }[self]
 
-    def example(self, prefix: str) -> str:
+    def example(self, prefix: str, sep: str = "_") -> str:
         p = prefix or "cam"
         short = p[:3].upper()
+        s = sep
         return {
-            NamingScheme.PREFIX_DATE: f"{p}_2026-01-31_001.mp4",
-            NamingScheme.TIMESTAMP_FULL: f"{short}_20260131_140144.mp4",
-            NamingScheme.DATE_PREFIX: f"2026-01-31_14-01_{p}.mp4",
-            NamingScheme.DATE_SEQ_CUSTOM: f"2026-01-31_001_{p}.mp4",
-            NamingScheme.CUSTOM_SEQ: f"{p}_001.mp4",
-            NamingScheme.SEQ_CUSTOM: f"001_{p}.mp4",
+            NamingScheme.PREFIX_DATE: f"{p}{s}2026-01-31{s}001.mp4",
+            NamingScheme.TIMESTAMP_FULL: f"{short}{s}20260131{s}140144.mp4",
+            NamingScheme.DATE_PREFIX: f"2026-01-31{s}14-01{s}{p}.mp4",
+            NamingScheme.DATE_SEQ_CUSTOM: f"2026-01-31{s}001{s}{p}.mp4",
+            NamingScheme.CUSTOM_SEQ: f"{p}{s}001.mp4",
+            NamingScheme.SEQ_CUSTOM: f"001{s}{p}.mp4",
             NamingScheme.ORIGINAL: "SCKR1000.mp4",
         }[self]
 
-    def generate_name(self, prefix: str, date: Optional[datetime], ext: str, counter: int) -> str:
+    def generate_name(self, prefix: str, date: Optional[datetime], ext: str,
+                      counter: int, sep: str = "_") -> str:
         p = prefix or "cam"
         short = p[:3].upper()
         d = date or datetime.now()
+        s = sep
         if self == NamingScheme.PREFIX_DATE:
-            return f"{p}_{d.year:04d}-{d.month:02d}-{d.day:02d}_{counter:03d}.{ext}"
+            return f"{p}{s}{d.year:04d}-{d.month:02d}-{d.day:02d}{s}{counter:03d}.{ext}"
         elif self == NamingScheme.TIMESTAMP_FULL:
-            return f"{short}_{d.year:04d}{d.month:02d}{d.day:02d}_{d.hour:02d}{d.minute:02d}{d.second:02d}.{ext}"
+            return f"{short}{s}{d.year:04d}{d.month:02d}{d.day:02d}{s}{d.hour:02d}{d.minute:02d}{d.second:02d}.{ext}"
         elif self == NamingScheme.DATE_PREFIX:
-            return f"{d.year:04d}-{d.month:02d}-{d.day:02d}_{d.hour:02d}-{d.minute:02d}_{p}.{ext}"
+            return f"{d.year:04d}-{d.month:02d}-{d.day:02d}{s}{d.hour:02d}-{d.minute:02d}{s}{p}.{ext}"
         elif self == NamingScheme.DATE_SEQ_CUSTOM:
-            return f"{d.year:04d}-{d.month:02d}-{d.day:02d}_{counter:03d}_{p}.{ext}"
+            return f"{d.year:04d}-{d.month:02d}-{d.day:02d}{s}{counter:03d}{s}{p}.{ext}"
         elif self == NamingScheme.CUSTOM_SEQ:
-            return f"{p}_{counter:03d}.{ext}"
+            return f"{p}{s}{counter:03d}.{ext}"
         elif self == NamingScheme.SEQ_CUSTOM:
-            return f"{counter:03d}_{p}.{ext}"
+            return f"{counter:03d}{s}{p}.{ext}"
         return ""
 
 
@@ -158,6 +161,7 @@ class CameraManager:
         self.video_dir = self._default_video_dir()
         self.naming_scheme = NamingScheme.PREFIX_DATE
         self.naming_prefix = "BirdCam"
+        self.naming_separator = "_"  # "_" or " "
         self.date_subfolders = False
         self.auto_open_folder = False
         try:
@@ -173,6 +177,8 @@ class CameraManager:
                     self.naming_scheme = ns
                     break
             self.naming_prefix = data.get("naming_prefix", self.naming_prefix)
+            sep = data.get("naming_separator", "_")
+            self.naming_separator = " " if sep == " " else "_"
             self.date_subfolders = data.get("date_subfolders", False)
             self.auto_open_folder = data.get("auto_open_folder", False)
         except (FileNotFoundError, json.JSONDecodeError):
@@ -185,6 +191,7 @@ class CameraManager:
             "video_dir": str(self.video_dir),
             "naming_scheme": self.naming_scheme.value,
             "naming_prefix": self.naming_prefix,
+            "naming_separator": self.naming_separator,
             "date_subfolders": self.date_subfolders,
             "auto_open_folder": self.auto_open_folder,
         }
@@ -248,6 +255,7 @@ class CameraManager:
             "video_dir": str(self.video_dir),
             "naming_scheme": self.naming_scheme.value,
             "naming_prefix": self.naming_prefix,
+            "naming_separator": self.naming_separator,
         }
         try:
             with open(self._profiles_path(), "w") as f:
@@ -271,6 +279,8 @@ class CameraManager:
                 self.naming_scheme = ns
                 break
         self.naming_prefix = p.get("naming_prefix", self.naming_prefix)
+        sep = p.get("naming_separator", "_")
+        self.naming_separator = " " if sep == " " else "_"
         self.save_settings()
         return True
 
@@ -586,24 +596,25 @@ class CameraManager:
     def _find_next_counter(self, date: Optional[datetime], ext: str) -> int:
         scheme = self.naming_scheme
         p = self.naming_prefix or "cam"
+        sep = re.escape(self.naming_separator)
         max_counter = 0
         try:
             for entry in self.video_dir.iterdir():
                 if not entry.name.endswith(f".{ext}"):
                     continue
                 if scheme == NamingScheme.CUSTOM_SEQ:
-                    # Match: {prefix}_{NNN}.{ext}
-                    m = re.search(r'^' + re.escape(p) + r'_(\d{3})\.' + re.escape(ext) + r'$', entry.name)
+                    # Match: {prefix}{sep}{NNN}.{ext}  (try both separators for compatibility)
+                    m = re.search(r'^' + re.escape(p) + r'[_ ](\d{3})\.' + re.escape(ext) + r'$', entry.name)
                 elif scheme == NamingScheme.SEQ_CUSTOM:
-                    # Match: {NNN}_{prefix}.{ext}
-                    m = re.search(r'^(\d{3})_' + re.escape(p) + r'\.' + re.escape(ext) + r'$', entry.name)
+                    # Match: {NNN}{sep}{prefix}.{ext}
+                    m = re.search(r'^(\d{3})[_ ]' + re.escape(p) + r'\.' + re.escape(ext) + r'$', entry.name)
                 else:
                     # Date-based schemes: match by date string
                     if date:
                         date_str = f"{date.year:04d}-{date.month:02d}-{date.day:02d}"
                         if date_str not in entry.name:
                             continue
-                    m = re.search(r'_(\d{3})\.' + re.escape(ext) + r'$', entry.name)
+                    m = re.search(r'[_ ](\d{3})\.' + re.escape(ext) + r'$', entry.name)
                 if m:
                     max_counter = max(max_counter, int(m.group(1)))
         except OSError:
@@ -649,7 +660,8 @@ class CameraManager:
                     date_counters[date_key] = self._find_next_counter(counter_date, ext)
                 counter = date_counters[date_key]
                 date_counters[date_key] = counter + 1
-                f.local_name = self.naming_scheme.generate_name(self.naming_prefix, date, ext, counter)
+                f.local_name = self.naming_scheme.generate_name(
+                    self.naming_prefix, date, ext, counter, self.naming_separator)
 
             self.log(f"[RESOLVE] {f.name} -> {f.local_name} (new)")
 
@@ -1220,9 +1232,24 @@ class HumDropApp(ctk.CTk):
 
         ctk.CTkLabel(hdr, text="Files", font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, sticky="w")
 
-        self.storage_label = ctk.CTkLabel(hdr, text="", font=ctk.CTkFont(size=14),
+        storage_row = ctk.CTkFrame(hdr, fg_color="transparent")
+        storage_row.grid(row=1, column=0, columnspan=2, sticky="ew")
+
+        self.storage_label = ctk.CTkLabel(storage_row, text="", font=ctk.CTkFont(size=14),
                                            text_color=TEXT_MUTED)
-        self.storage_label.grid(row=1, column=0, sticky="w")
+        self.storage_label.pack(side="left")
+
+        # Visual storage bar (teal filled bar with empty/full markers)
+        self.storage_canvas = tk.Canvas(storage_row, width=160, height=16,
+                                         highlightthickness=0)
+        # Match canvas bg to the CTk window bg
+        try:
+            ctk_bg = ctk.ThemeManager.theme["CTk"]["fg_color"]
+            mode = ctk.get_appearance_mode()
+            self.storage_canvas.configure(bg=ctk_bg[1] if mode == "Dark" else ctk_bg[0])
+        except Exception:
+            self.storage_canvas.configure(bg="#2b2b2b" if ctk.get_appearance_mode() == "Dark" else "#f0f0f0")
+        self.storage_canvas.pack(side="left", padx=(8, 0))
 
         btn_row = ctk.CTkFrame(hdr, fg_color="transparent")
         btn_row.grid(row=0, column=1, sticky="e")
@@ -1345,7 +1372,7 @@ class HumDropApp(ctk.CTk):
 
         ctk.CTkLabel(naming_frame, text="Naming", font=ctk.CTkFont(size=16, weight="bold")).pack(side="left")
 
-        scheme_values = [f"{s.display_name}  ({s.example(self.camera.naming_prefix)})" for s in NamingScheme]
+        scheme_values = [f"{s.display_name}  ({s.example(self.camera.naming_prefix, self.camera.naming_separator)})" for s in NamingScheme]
         self.scheme_var = ctk.StringVar(value=scheme_values[list(NamingScheme).index(self.camera.naming_scheme)])
         self.scheme_menu = ctk.CTkOptionMenu(
             naming_frame, values=scheme_values, variable=self.scheme_var,
@@ -1355,6 +1382,28 @@ class HumDropApp(ctk.CTk):
             command=self._scheme_changed
         )
         self.scheme_menu.pack(side="left", padx=(8, 0))
+
+        # Separator radio buttons (underscore vs space)
+        sep_frame = ctk.CTkFrame(naming_frame, fg_color="transparent")
+        sep_frame.pack(side="left", padx=(12, 0))
+
+        self.sep_var = ctk.StringVar(value=self.camera.naming_separator)
+
+        ctk.CTkRadioButton(
+            sep_frame, text="underscore", variable=self.sep_var, value="_",
+            font=ctk.CTkFont(size=14), text_color=TEXT_SEC,
+            fg_color=TEAL, hover_color=TEAL_HOVER,
+            border_color=BORDER,
+            command=self._separator_changed
+        ).pack(side="left")
+
+        ctk.CTkRadioButton(
+            sep_frame, text="space", variable=self.sep_var, value=" ",
+            font=ctk.CTkFont(size=14), text_color=TEXT_SEC,
+            fg_color=TEAL, hover_color=TEAL_HOVER,
+            border_color=BORDER,
+            command=self._separator_changed
+        ).pack(side="left", padx=(8, 0))
 
         prefix_frame = ctk.CTkFrame(f, fg_color="transparent")
         prefix_frame.grid(row=9, column=0, sticky="ew", padx=20, pady=(4, 0))
@@ -1567,6 +1616,11 @@ class HumDropApp(ctk.CTk):
 
     def _connect_success(self):
         self._stop_connect_spinner()
+        # Guard: if disconnect happened during the connect thread, bail out
+        if not self.camera.is_reachable():
+            self._update_status("Disconnected", connected=False)
+            self.connect_btn.configure(state="normal", text="Reconnect")
+            return
         self.is_connected = True
         self.connect_btn.configure(state="normal", text="Disconnect")
         self._update_status("Connected", connected=True)
@@ -1598,7 +1652,7 @@ class HumDropApp(ctk.CTk):
                 # list_files returned None or raised — check if camera is gone
                 if not self.camera.is_reachable():
                     self.after(0, lambda: self._handle_disconnect(
-                        "Lost connection during refresh. Click Connect to reconnect."))
+                        "Disconnected"))
                     return
                 found = []
             self.after(0, lambda: self._refresh_done(found))
@@ -1606,6 +1660,10 @@ class HumDropApp(ctk.CTk):
         threading.Thread(target=do_refresh, daemon=True).start()
 
     def _refresh_done(self, found: List[CameraFile]):
+        # Guard: if we disconnected while the refresh was in-flight, ignore this callback
+        if not self.is_connected:
+            return
+
         # Stop the scanning progress bar
         self.progress_bar.stop()
         self.progress_bar.configure(mode="determinate")
@@ -1617,7 +1675,7 @@ class HumDropApp(ctk.CTk):
         self._refresh_table()
         self._update_summary()
         self._re_enable_buttons()
-        self._update_status("Connected (no files found)" if not found else "Connected", connected=True)
+        self._update_status("No files found" if not found else "Connected", connected=True)
 
     def _download(self):
         if self.is_downloading:
@@ -1748,8 +1806,7 @@ class HumDropApp(ctk.CTk):
         self._re_enable_buttons()
 
         if connection_lost:
-            self._handle_disconnect(
-                f"Downloaded {total} files before connection was lost.")
+            self._handle_disconnect("Disconnected")
             self._send_notification("HumDrop", f"Connection lost after downloading {total} files.")
             self._log_session("download", total, notes=f"Connection lost, auto-deleted {auto_deleted}")
             return
@@ -1779,8 +1836,7 @@ class HumDropApp(ctk.CTk):
                 except Exception:
                     found = None
                 if found is None and not self.camera.is_reachable():
-                    self.after(0, lambda: self._handle_disconnect(
-                        f"Downloaded {total}, deleted {auto_deleted}, but lost connection."))
+                    self.after(0, lambda: self._handle_disconnect("Disconnected"))
                     return
                 self.after(0, lambda: self._download_auto_delete_refresh_done(
                     found or [], total, auto_deleted))
@@ -1796,6 +1852,8 @@ class HumDropApp(ctk.CTk):
     def _download_auto_delete_refresh_done(self, found: list, downloaded: int,
                                             deleted: int):
         """Post-auto-delete refresh: update file list and show final status."""
+        if not self.is_connected:
+            return
         self.progress_bar.stop()
         self.progress_bar.configure(mode="determinate")
         self.progress_bar.set(1.0)
@@ -1855,13 +1913,16 @@ class HumDropApp(ctk.CTk):
         # Disable all action buttons since nothing works without connection
         self._disable_buttons()
 
-        # Clear file state
+        # Clear file state and storage display
         self.files = []
         self._refresh_table()
         self._update_summary()
+        self.storage_label.configure(text="")
+        if hasattr(self, 'storage_canvas'):
+            self.storage_canvas.delete("all")
 
         # Notify user
-        self._send_notification("HumDrop", message)
+        self._send_notification("HumDrop", "Connection lost")
 
     def _start_heartbeat(self):
         """Start a periodic check that the camera is still reachable."""
@@ -1884,7 +1945,7 @@ class HumDropApp(ctk.CTk):
             if not reachable and self._heartbeat_running and self.is_connected:
                 self.camera.log("[HEARTBEAT] Camera unreachable")
                 self.after(0, lambda: self._handle_disconnect(
-                    "Camera disconnected. Click Connect to reconnect."))
+                    "Disconnected"))
             elif self._heartbeat_running:
                 self.after(5000, self._heartbeat_check)
 
@@ -1926,8 +1987,7 @@ class HumDropApp(ctk.CTk):
                 except Exception as e:
                     self.camera.log(f"[DELETE] Error deleting {f.name}: {e}")
                     if not self.camera.is_reachable():
-                        self.after(0, lambda d=deleted: self._handle_disconnect(
-                            f"Connection lost after deleting {d}/{total} files."))
+                        self.after(0, lambda d=deleted: self._handle_disconnect("Disconnected"))
                         return
             self.after(0, lambda: self._delete_done(deleted))
 
@@ -1949,8 +2009,7 @@ class HumDropApp(ctk.CTk):
             except Exception:
                 found = None
             if found is None and not self.camera.is_reachable():
-                self.after(0, lambda: self._handle_disconnect(
-                    f"Deleted {count} files, but lost connection during refresh."))
+                self.after(0, lambda: self._handle_disconnect("Disconnected"))
                 return
             self.after(0, lambda: self._delete_refresh_done(found or [], count))
 
@@ -1958,6 +2017,8 @@ class HumDropApp(ctk.CTk):
 
     def _delete_refresh_done(self, found: list, deleted_count: int):
         """Post-delete refresh complete: update UI and re-enable."""
+        if not self.is_connected:
+            return
         self.progress_bar.stop()
         self.progress_bar.configure(mode="determinate")
         self.progress_bar.set(1.0)
@@ -2006,8 +2067,7 @@ class HumDropApp(ctk.CTk):
             except Exception as e:
                 self.camera.log(f"[WIPE] Error: {e}")
                 if not self.camera.is_reachable():
-                    self.after(0, lambda: self._handle_disconnect(
-                        "Connection lost during wipe."))
+                    self.after(0, lambda: self._handle_disconnect("Disconnected"))
                     return
             self.after(0, self._wipe_done)
 
@@ -2023,14 +2083,15 @@ class HumDropApp(ctk.CTk):
             except Exception:
                 found = None
             if found is None and not self.camera.is_reachable():
-                self.after(0, lambda: self._handle_disconnect(
-                    "Wipe completed, but lost connection during refresh."))
+                self.after(0, lambda: self._handle_disconnect("Disconnected"))
                 return
             self.after(0, lambda: self._wipe_refresh_done(found or []))
 
         threading.Thread(target=do_refresh, daemon=True).start()
 
     def _wipe_refresh_done(self, found: list):
+        if not self.is_connected:
+            return
         self.progress_bar.stop()
         self.progress_bar.configure(mode="determinate")
         self.progress_bar.set(1.0)
@@ -2073,7 +2134,7 @@ class HumDropApp(ctk.CTk):
             subprocess.run(["xdg-open", path])
 
     def _fetch_storage_info(self):
-        """Fetch camera storage usage in background and update the label."""
+        """Fetch camera storage usage in background and update the label + bar."""
         def do_fetch():
             info = self.camera.get_storage_info()
             if info and self.is_connected:
@@ -2085,9 +2146,44 @@ class HumDropApp(ctk.CTk):
                 free = fmt(info["free"])
                 total = fmt(info["total"])
                 pct = info["used"] / info["total"] * 100 if info["total"] else 0
-                self.after(0, lambda: self.storage_label.configure(
-                    text=f"Storage: {used} used / {free} free / {total} total ({pct:.0f}%)"))
+                def update_ui():
+                    self.storage_label.configure(
+                        text=f"Storage: {used} used / {free} free / {total} total ({pct:.0f}%)")
+                    self._draw_storage_bar(pct)
+                self.after(0, update_ui)
         threading.Thread(target=do_fetch, daemon=True).start()
+
+    def _draw_storage_bar(self, pct: float):
+        """Draw a teal storage bar with empty/full indicators."""
+        c = self.storage_canvas
+        c.delete("all")
+        w, h = 160, 16
+        bar_x, bar_w = 20, 120  # leave room for icons on each side
+        bar_y, bar_h = 2, 12
+        radius = 4
+
+        # "Empty" icon on left — small empty rectangle
+        c.create_rectangle(4, 4, 14, 12, outline=TEAL, width=1)
+
+        # "Full" icon on right — small filled rectangle
+        c.create_rectangle(w - 14, 4, w - 4, 12, outline=TEAL, fill=TEAL, width=1)
+
+        # Bar background (rounded rect outline)
+        c.create_rectangle(bar_x, bar_y, bar_x + bar_w, bar_y + bar_h,
+                           outline=TEAL, width=1, fill="")
+
+        # Filled portion
+        fill_w = max(0, min(bar_w, int(bar_w * pct / 100)))
+        if fill_w > 0:
+            # Pick color: teal normally, orange if > 80%, red if > 95%
+            fill_color = TEAL
+            if pct > 95:
+                fill_color = RED
+            elif pct > 80:
+                fill_color = ORANGE
+            c.create_rectangle(bar_x + 1, bar_y + 1,
+                               bar_x + fill_w - 1, bar_y + bar_h - 1,
+                               fill=fill_color, outline="")
 
     def _toggle_date_subfolders(self):
         self.camera.date_subfolders = self.date_subfolder_var.get()
@@ -2153,7 +2249,7 @@ class HumDropApp(ctk.CTk):
 
     def _scheme_changed(self, value: str):
         schemes = list(NamingScheme)
-        values = [f"{s.display_name}  ({s.example(self.camera.naming_prefix)})" for s in schemes]
+        values = [f"{s.display_name}  ({s.example(self.camera.naming_prefix, self.camera.naming_separator)})" for s in schemes]
         try:
             idx = values.index(value)
             self.camera.naming_scheme = schemes[idx]
@@ -2167,6 +2263,14 @@ class HumDropApp(ctk.CTk):
 
         self._update_example()
 
+        if self.files and self.is_connected:
+            self._refresh()
+
+    def _separator_changed(self):
+        self.camera.naming_separator = self.sep_var.get()
+        self.camera.save_settings()
+        self._update_scheme_menu()
+        self._update_example()
         if self.files and self.is_connected:
             self._refresh()
 
@@ -2184,13 +2288,13 @@ class HumDropApp(ctk.CTk):
             self._refresh()
 
     def _update_scheme_menu(self):
-        values = [f"{s.display_name}  ({s.example(self.camera.naming_prefix)})" for s in NamingScheme]
+        values = [f"{s.display_name}  ({s.example(self.camera.naming_prefix, self.camera.naming_separator)})" for s in NamingScheme]
         self.scheme_menu.configure(values=values)
         idx = list(NamingScheme).index(self.camera.naming_scheme)
         self.scheme_var.set(values[idx])
 
     def _update_example(self):
-        ex = self.camera.naming_scheme.example(self.camera.naming_prefix)
+        ex = self.camera.naming_scheme.example(self.camera.naming_prefix, self.camera.naming_separator)
         self.example_label.configure(text=f"e.g. {ex}")
 
     def _show_profiles(self):
@@ -2258,6 +2362,7 @@ class HumDropApp(ctk.CTk):
                 self.folder_btn.configure(text=self._short_path(self.camera.video_dir))
                 self.prefix_entry.delete(0, "end")
                 self.prefix_entry.insert(0, self.camera.naming_prefix)
+                self.sep_var.set(self.camera.naming_separator)
                 self._update_scheme_menu()
                 self._update_example()
                 dlg.destroy()
@@ -2366,7 +2471,7 @@ class HumDropApp(ctk.CTk):
         ctk.CTkLabel(banner_inner, text="HumDrop",
                      font=ctk.CTkFont(size=26, weight="bold"),
                      text_color="white").pack(pady=(2, 0))
-        ctk.CTkLabel(banner_inner, text="v0.07  \u2022  Camera Sync",
+        ctk.CTkLabel(banner_inner, text="v0.08  \u2022  Camera Sync",
                      font=ctk.CTkFont(size=15),
                      text_color=TEAL_HOVER).pack()
 
