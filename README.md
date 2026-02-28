@@ -50,11 +50,13 @@ HumDrop connects directly to the camera over your local WiFi and pulls the **ori
 </tr>
 </table>
 
-### Homebrew (macOS)
+### Homebrew (macOS &mdash; recommended)
 
 ```bash
-brew install --cask Fe2-O3/tap/humdrop
+brew install Fe2-O3/tap/humdrop
 ```
+
+Builds from source &mdash; no Gatekeeper warning, no code signing needed. Then just run `humdrop` from Terminal.
 
 ### Run from Source
 
