@@ -30,24 +30,22 @@ HumDrop connects directly to the camera over your local WiFi and pulls the **ori
 
 ## Install
 
-### macOS
-
-**Homebrew (recommended)** &mdash; builds from source, no Gatekeeper warning:
+### macOS &amp; Linux &mdash; Homebrew (recommended)
 
 ```bash
 brew install Fe2-O3/tap/humdrop
 humdrop
 ```
 
-Or [download HumDrop-macOS.zip](https://github.com/Fe2-O3/HumDrop/releases/latest) directly (see [first launch notes](#first-launch)).
+Builds from source &mdash; no Gatekeeper warning on macOS, no hassle on Linux.
 
-### Windows
+### Direct Download
 
-[Download HumDrop-Windows.zip](https://github.com/Fe2-O3/HumDrop/releases/latest) &mdash; extract the folder, run `HumDrop.exe` (see [first launch notes](#first-launch)).
-
-### Linux
-
-[Download HumDrop-Linux.tar.gz](https://github.com/Fe2-O3/HumDrop/releases/latest) &mdash; extract, run `./HumDrop`. Requires a desktop environment.
+| Platform | Download | Run |
+|----------|----------|-----|
+| **macOS** | [HumDrop-macOS.zip](https://github.com/Fe2-O3/HumDrop/releases/latest) | Unzip, open `HumDrop.app` (see [first launch](#first-launch)) |
+| **Windows** | [HumDrop-Windows.zip](https://github.com/Fe2-O3/HumDrop/releases/latest) | Extract folder, run `HumDrop.exe` (see [first launch](#first-launch)) |
+| **Linux** | [HumDrop-Linux.tar.gz](https://github.com/Fe2-O3/HumDrop/releases/latest) | Extract, run `./HumDrop` |
 
 ### Run from Source (all platforms)
 
@@ -129,7 +127,7 @@ HumDrop works with WiFi cameras that expose a telnet server (port 23) and busybo
 ## First Launch
 
 <details>
-<summary><strong>macOS</strong> &mdash; Gatekeeper warning (one-time)</summary>
+<summary><strong>macOS</strong> &mdash; Gatekeeper warning (one-time, direct download only)</summary>
 
 The app is not code-signed. On first launch:
 
@@ -137,6 +135,10 @@ The app is not code-signed. On first launch:
 2. Open **System Settings &rarr; Privacy & Security**
 3. Scroll down and click **"Open Anyway"**
 4. Done &mdash; won't ask again
+
+Or use [Sentinel](https://github.com/alienator88/Sentinel) to remove the quarantine flag before opening &mdash; a free, open-source tool that makes managing unsigned apps easy.
+
+**Tip:** Installing via Homebrew (`brew install Fe2-O3/tap/humdrop`) avoids this entirely.
 
 </details>
 
