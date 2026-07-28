@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HumDrop v0.09 — Cross-platform camera sync utility
+HumDrop v0.10 — Cross-platform camera sync utility
 By Kenneth Russell DeGraff
 
 Syncs videos and photos from WiFi-enabled trail/bird cameras.
@@ -24,12 +24,22 @@ import urllib.request
 import tkinter as tk
 from enum import Enum
 from pathlib import Path
+from collections import deque
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Callable, Tuple
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
+
+# Download progress display tuning.
+# _SPEED_WINDOW_SEC: how far back the rolling rate looks. Short enough to track
+#   the current file, long enough to ride out the gap between files.
+# _UI_THROTTLE_SEC: floor on the interval between progress pushes to the Tk
+#   event loop. ~7/sec still reads as live and keeps the main thread idle
+#   enough that it isn't fighting the download for the GIL.
+_SPEED_WINDOW_SEC = 5.0
+_UI_THROTTLE_SEC = 0.15
 
 # ============================================================
 # MARK: - Naming Schemes
@@ -1892,6 +1902,61 @@ class HumDropApp(ctk.CTk):
             connection_lost = False
             session_start = time.time()
             cumulative_bytes = [0]  # mutable for nested access
+            # Rolling (transfer-clock, bytes) window backing the displayed rate,
+            # plus the timestamp of the last UI push so a fast transfer can't
+            # flood Tk.
+            samples = deque(maxlen=128)
+            last_ui_push = [0.0]
+            # Wall clock minus the gaps between files. Those gaps are real time
+            # but move zero bytes (telnet delete round-trip, httpd handshake),
+            # so charging them to the transfer rate is what made the MB/s number
+            # read low and drift. The ETA still uses wall clock — it has to
+            # predict wall clock — but the rate should be the rate.
+            idle_total = [0.0]
+            last_byte_at = [0.0]
+
+            def progress_text(name, c, cur_bytes, now):
+                """Build the status line on the worker thread.
+
+                Rate comes from a short rolling window over transfer time, so it
+                shows what the wire is doing now rather than a session average
+                that every round-trip since the batch began has diluted.
+                """
+                # Seconds since the batch began, minus the between-file gaps.
+                # Must be relative: it is also the divisor in the warm-up rate
+                # below, and an absolute epoch there yields a rate of zero.
+                clock = now - session_start - idle_total[0]
+                samples.append((clock, cur_bytes))
+                rate = 0.0
+                t0, b0 = samples[0]
+                for t, b in samples:
+                    if clock - t <= _SPEED_WINDOW_SEC:
+                        break
+                    t0, b0 = t, b
+                dt, db = clock - t0, cur_bytes - b0
+                if dt >= 0.5 and db > 0:
+                    rate = db / dt
+                elif clock > 0.5 and cur_bytes > 0:
+                    rate = cur_bytes / clock          # not enough window yet
+                speed_str = f"{rate / 1_048_576:.1f} MB/s" if rate else "..."
+
+                # Estimate the two costs separately: bytes still to move at the
+                # measured wire rate, plus the per-file gap for every file not
+                # yet started. The old estimate rolled both into one average
+                # rate, so it had to climb file after file as gaps accumulated
+                # — the number appeared to get worse the longer you waited.
+                eta = "..."
+                if rate > 0 and total_bytes > cur_bytes:
+                    per_file_gap = idle_total[0] / c if c else 0.0
+                    secs_left = int((total_bytes - cur_bytes) / rate
+                                    + max(0, total - c - 1) * per_file_gap)
+                    mins, secs = divmod(secs_left, 60)
+                    eta = f"{mins}:{secs:02d}" if mins else f"{secs}s"
+                return f"Downloading {name} ({c + 1}/{total}) — {speed_str}, ~{eta} left"
+
+            def apply_ui(text, frac):
+                self.progress_label.configure(text=text)
+                self.progress_bar.set(frac)
 
             for completed, (idx, file) in enumerate(selected):
                 # Check cancel flag before each file
@@ -1902,35 +1967,48 @@ class HumDropApp(ctk.CTk):
                 dl_name = file.local_name
                 file_bytes_so_far = [0]
 
-                def update_speed_label(name=dl_name, c=completed, fb=file_bytes_so_far):
-                    elapsed = time.time() - session_start
+                def push_ui(force=False, name=dl_name, c=completed,
+                            fb=file_bytes_so_far, size=file.size_bytes):
+                    """Marshal one finished string to the main thread, at most
+                    every _UI_THROTTLE_SEC. Previously every 64 KB chunk queued
+                    two `after` callbacks, so a multi-megabyte file could pile
+                    hundreds of them onto the event loop; the main thread then
+                    competed with the socket read for the GIL and the backlog
+                    carried across files, making each download slower than the
+                    last."""
+                    now = time.time()
+                    if not force and now - last_ui_push[0] < _UI_THROTTLE_SEC:
+                        return
+                    last_ui_push[0] = now
                     cur_bytes = cumulative_bytes[0] + fb[0]
-                    if elapsed > 0.5:
-                        speed = cur_bytes / elapsed
-                        if speed > 0 and total_bytes > 0:
-                            remaining = (total_bytes - cur_bytes) / speed
-                            mins, secs = divmod(int(remaining), 60)
-                            eta = f"{mins}:{secs:02d}" if mins else f"{secs}s"
-                            speed_str = f"{speed / 1_048_576:.1f} MB/s"
-                        else:
-                            eta = "..."
-                            speed_str = "..."
-                    else:
-                        eta = "..."
-                        speed_str = "..."
-                    self.progress_label.configure(
-                        text=f"Downloading {name} ({c + 1}/{total}) — {speed_str}, ~{eta} left")
+                    text = progress_text(name, c, cur_bytes, now)
+                    frac = (c + (fb[0] / size if size else 0)) / total
+                    self.after(0, lambda t=text, v=frac: apply_ui(t, v))
 
-                self.after(0, update_speed_label)
+                push_ui(force=True)
 
-                def prog(pct, c=completed, fb=file_bytes_so_far):
-                    fb[0] = int(pct * file.size_bytes) if file.size_bytes else 0
-                    overall = (c + pct) / total
-                    self.after(0, lambda v=overall: self.progress_bar.set(v))
-                    self.after(0, update_speed_label)
+                first_byte = [True]
+
+                def note_bytes():
+                    """Charge the pre-transfer gap to idle, not to the wire.
+                    On the first file there is no previous byte to measure from,
+                    so fall back to the batch start — otherwise that one gap is
+                    never discounted and skews the rate for the whole session."""
+                    now = time.time()
+                    if first_byte[0]:
+                        first_byte[0] = False
+                        idle_total[0] += now - (last_byte_at[0] or session_start)
+                    last_byte_at[0] = now
+
+                def prog(pct, fb=file_bytes_so_far, size=file.size_bytes):
+                    fb[0] = int(pct * size) if size else 0
+                    note_bytes()
+                    push_ui()
 
                 def on_bytes(b, fb=file_bytes_so_far):
                     fb[0] = b
+                    note_bytes()
+                    push_ui()
 
                 done_event = threading.Event()
                 success_flag = [False]
@@ -2756,7 +2834,7 @@ class HumDropApp(ctk.CTk):
         ctk.CTkLabel(banner_inner, text="HumDrop",
                      font=ctk.CTkFont(size=26, weight="bold"),
                      text_color="white").pack(pady=(2, 0))
-        ctk.CTkLabel(banner_inner, text="v0.09  \u2022  Camera Sync",
+        ctk.CTkLabel(banner_inner, text="v0.10  \u2022  Camera Sync",
                      font=ctk.CTkFont(size=15),
                      text_color=TEAL_HOVER).pack()
 
