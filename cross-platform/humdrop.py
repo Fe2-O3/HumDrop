@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HumDrop v0.10 — Cross-platform camera sync utility
+HumDrop v0.10-b2 — Cross-platform camera sync utility
 By Kenneth Russell DeGraff
 
 Syncs videos and photos from WiFi-enabled trail/bird cameras.
@@ -150,6 +150,18 @@ class CameraManager:
     # OUI prefix of this specific camera's WiFi module — survives DHCP IP changes.
     CAMERA_MAC_PREFIX = "50:5a:65"
 
+    # Where to look when the shell is not on 23. There is no authoritative list
+    # to copy: the vendor Android app never speaks to the camera over the LAN at
+    # all — every command goes out through a P2P cloud relay — so it has no idea
+    # telnet exists. Telnet is an undocumented firmware backdoor, which also
+    # means firmware is free to move it or drop it without breaking the app.
+    # These are the ports embedded camera firmware commonly puts a shell on.
+    SHELL_PORT_CANDIDATES = (23, 2323, 2222, 9527, 24, 8023, 1023, 23023, 4321)
+    # Ports that might already be serving HTTP. Worth knowing about: if a camera
+    # has no shell but does run a web server, that is the only remaining way in.
+    HTTP_PORT_CANDIDATES = (80, 8080, 81, 8000, 8081, 8088, 8090, 8181, 8888)
+    _PROBE_TOKEN = "HUMDROPSHELLOK"
+
     def __init__(self):
         self.telnet_port = 23
         self.http_port = 8080
@@ -183,6 +195,10 @@ class CameraManager:
             with open(self._settings_path()) as f:
                 data = json.load(f)
             self.camera_ip = data.get("camera_ip", self.camera_ip)
+            try:
+                self.telnet_port = int(data.get("telnet_port", self.telnet_port))
+            except (TypeError, ValueError):
+                pass
             d = data.get("video_dir")
             if d:
                 self.video_dir = Path(d)
@@ -204,6 +220,7 @@ class CameraManager:
     def save_settings(self):
         data = {
             "camera_ip": self.camera_ip,
+            "telnet_port": self.telnet_port,
             "video_dir": str(self.video_dir),
             "naming_scheme": self.naming_scheme.value,
             "naming_prefix": self.naming_prefix,
@@ -940,6 +957,107 @@ class CameraManager:
             self.log(f"[SWEEP] error: {e}")
         return None
 
+    def _probe_shell(self, ip: str, port: int,
+                     timeout: float = 4.0) -> Optional[str]:
+        """Classify what kind of shell, if any, answers on this port.
+
+        Returns "usable", "login" (a shell that wants credentials we do not
+        have), or None. An open port proves nothing, and a banner check is no
+        use either — this hardware sends an empty telnet banner — so ask the
+        shell to say something specific and check that it did.
+        """
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        try:
+            if sock.connect_ex((ip, port)) != 0:
+                return None
+            time.sleep(0.5)
+            banner = self._strip_iac(self._drain(sock))
+            sock.sendall(f"echo {self._PROBE_TOKEN}\n".encode("utf-8"))
+            # Real busybox on a sleepy SoC can be slow; the normal command path
+            # in this app already allows 2s, so do not be stingier here.
+            time.sleep(2.0)
+            text = self._strip_iac(self._drain(sock))
+            combined = banner + text
+            # A line that is *only* the token is the shell's own output — the
+            # command we sent gets echoed back too, which is why an anywhere
+            # match is not enough. Seeing the token twice means the same thing
+            # for shells that do not put output on a clean line.
+            if (any(line.strip() == self._PROBE_TOKEN for line in text.splitlines())
+                    or text.count(self._PROBE_TOKEN) >= 2):
+                return "usable"
+            if re.search(r"login:|[Pp]assword:|assword", combined):
+                return "login"
+            return None
+        except (OSError, socket.error):
+            return None
+        finally:
+            sock.close()
+
+    def _probe_http(self, ip: str, port: int, timeout: float = 3.0) -> Optional[str]:
+        """Describe an HTTP server here, or None if there isn't one."""
+        try:
+            with urllib.request.urlopen(f"http://{ip}:{port}/", timeout=timeout) as r:
+                body = r.read(4096).decode("utf-8", "ignore")
+                server = r.headers.get("Server", "unknown")
+                extra = " — appears to serve DCIM" if re.search(
+                    r"SYCAM|DCIM", body, re.I) else ""
+                return f"HTTP (Server: {server}){extra}"
+        except urllib.error.HTTPError as e:
+            return f"HTTP, refused with {e.code}"
+        except Exception:
+            return None
+
+    def _probe_port(self, ip: str, port: int) -> Optional[Tuple[int, str]]:
+        if port in self.SHELL_PORT_CANDIDATES:
+            kind = self._probe_shell(ip, port)
+            if kind == "usable":
+                return port, "SHELL (usable)"
+            if kind == "login":
+                return port, "shell, but it asks for a login"
+        desc = self._probe_http(ip, port)
+        if desc:
+            return port, desc
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1.5)
+        try:
+            if sock.connect_ex((ip, port)) == 0:
+                return port, "open, not recognised"
+        except (OSError, socket.error):
+            pass
+        finally:
+            sock.close()
+        return None
+
+    def probe_services(self, ip: str,
+                       status_cb: Optional[Callable] = None) -> Dict[int, str]:
+        """Fingerprint what this camera actually exposes.
+
+        Serves two purposes: recovering when the shell has moved off 23, and
+        telling someone with unknown firmware what their camera is really
+        running instead of just reporting a dead connection.
+        """
+        ports = sorted(set(self.SHELL_PORT_CANDIDATES) | set(self.HTTP_PORT_CANDIDATES))
+        if status_cb:
+            status_cb(f"Probing {len(ports)} ports on {ip}...")
+        found: Dict[int, str] = {}
+        with ThreadPoolExecutor(max_workers=20) as pool:
+            for r in pool.map(lambda p: self._probe_port(ip, p), ports):
+                if r:
+                    found[r[0]] = r[1]
+        self.log(f"[PROBE] {ip}: {found or 'nothing open'}")
+        return found
+
+    def find_shell_port(self, ip: str) -> Optional[int]:
+        """Locate the shell wherever the firmware put it, preferring 23."""
+        with ThreadPoolExecutor(max_workers=len(self.SHELL_PORT_CANDIDATES)) as pool:
+            checked = list(pool.map(lambda p: (p, self._probe_shell(ip, p)),
+                                    self.SHELL_PORT_CANDIDATES))
+        for port, kind in checked:        # map preserves order, so 23 wins ties
+            if kind == "usable":
+                return port
+        return None
+
     def discover(self, status_cb: Callable) -> Tuple[Optional[str], str]:
         """Single entry point for both manual Connect and the background
         watcher: try the last-known/manual IP first, then fall back to an
@@ -950,8 +1068,24 @@ class CameraManager:
                 return self.camera_ip, "last known address"
 
         ip = self._mac_sweep(status_cb)
-        if ip:
+        if not ip:
+            return None, ""
+
+        self.camera_ip = ip
+        if self.is_reachable():
             return ip, "MAC address"
+
+        # The hardware answered ARP but the shell did not answer where we last
+        # saw it. Firmware can relocate the port, so look for it before calling
+        # the camera unreachable — otherwise a moved port is indistinguishable
+        # from a dead camera.
+        status_cb("Camera found — locating its shell port...")
+        port = self.find_shell_port(ip)
+        if port:
+            self.log(f"[DISCOVER] shell on port {port} (expected {self.telnet_port})")
+            self.telnet_port = port
+            self.save_settings()
+            return ip, f"MAC address, shell on port {port}"
         return None, ""
 
 
@@ -1788,16 +1922,68 @@ class HumDropApp(ctk.CTk):
         self._stop_connect_spinner()
         self.connect_btn.configure(state="normal")
         self._update_status("Watching for camera...", connected=False)
-        messagebox.showwarning("Camera Not Found",
-                               f"Could not reach the camera (last known address "
-                               f"{self.camera.camera_ip}, and no device matching its "
-                               f"MAC address was found on the network).\n\n"
-                               "Make sure:\n1. The camera app is open and streaming\n"
-                               "2. You're on the same Wi-Fi network\n"
-                               "3. The camera is powered on\n\n"
-                               "HumDrop will keep watching in the background and "
-                               "connect automatically once it's reachable.")
+        ip = self.camera.camera_ip
+        want_probe = messagebox.askyesno(
+            "Camera Not Found",
+            f"Could not reach the camera (last known address {ip}, and no "
+            f"device matching its MAC address was found on the network).\n\n"
+            "Make sure:\n1. The camera app is open and streaming\n"
+            "2. You're on the same Wi-Fi network\n"
+            "3. The camera is powered on\n\n"
+            "HumDrop will keep watching in the background and connect "
+            "automatically once it's reachable.\n\n"
+            "Scan that address now to see what the camera is running?")
         self._start_watch()
+        if want_probe and self.camera._is_valid_ip(ip):
+            self._run_diagnostic(ip)
+
+    def _run_diagnostic(self, ip: str):
+        """Report what the camera actually exposes on the network.
+
+        'Nothing is listening' and 'the shell moved to another port' look
+        identical from the outside — both just fail to connect. Users on
+        firmware we cannot test against need to be able to tell us which one
+        they have.
+        """
+        self._update_status(f"Scanning {ip}...", connected=False)
+
+        def work():
+            found = self.camera.probe_services(ip)
+            self.after(0, lambda: self._diagnostic_done(ip, found))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _diagnostic_done(self, ip: str, found: Dict[int, str]):
+        self._update_status("Watching for camera...", connected=False)
+        checked = len(set(self.camera.SHELL_PORT_CANDIDATES) |
+                      set(self.camera.HTTP_PORT_CANDIDATES))
+        if not found:
+            messagebox.showwarning(
+                "Diagnostic: nothing is listening",
+                f"Checked {checked} ports on {ip}; none are open.\n\n"
+                "If the camera was definitely awake, this most likely means "
+                "the firmware has no telnet shell. HumDrop needs one — it "
+                "starts the file server by running a command over telnet, so "
+                "with no shell there is nothing for it to connect to.\n\n"
+                "Note these cameras close every port while asleep, so it is "
+                "worth retrying with the vendor app live-streaming before "
+                "concluding anything.\n\n"
+                "Please report this on GitHub: results from firmware we have "
+                "no way to test against are genuinely useful.")
+            return
+
+        shells = sorted(p for p, d in found.items() if d.startswith("SHELL"))
+        if shells:
+            self.camera.telnet_port = shells[0]
+            self.camera.save_settings()
+            head = (f"Found a usable shell on port {shells[0]}.\n"
+                    "HumDrop has saved that and will use it from now on.\n\n")
+        else:
+            head = ("Open ports found, but no telnet shell among them.\n"
+                    "HumDrop needs a shell to start the file server, so it "
+                    "cannot use these on its own — but please do report them.\n\n")
+        lines = "\n".join(f"    {p} — {d}" for p, d in sorted(found.items()))
+        messagebox.showinfo("Diagnostic results", f"{head}On {ip}:\n\n{lines}")
 
     def _connect_success(self):
         self._stop_connect_spinner()
@@ -2834,7 +3020,7 @@ class HumDropApp(ctk.CTk):
         ctk.CTkLabel(banner_inner, text="HumDrop",
                      font=ctk.CTkFont(size=26, weight="bold"),
                      text_color="white").pack(pady=(2, 0))
-        ctk.CTkLabel(banner_inner, text="v0.10  \u2022  Camera Sync",
+        ctk.CTkLabel(banner_inner, text="v0.10-b2  \u2022  Camera Sync",
                      font=ctk.CTkFont(size=15),
                      text_color=TEAL_HOVER).pack()
 
