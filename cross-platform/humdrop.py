@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HumDrop v0.082 — Cross-platform camera sync utility
+HumDrop v0.09 — Cross-platform camera sync utility
 By Kenneth Russell DeGraff
 
 Syncs videos and photos from WiFi-enabled trail/bird cameras.
@@ -15,6 +15,7 @@ import math
 import time
 import socket
 import shutil
+import ipaddress
 import platform
 import subprocess
 import threading
@@ -25,7 +26,7 @@ from enum import Enum
 from pathlib import Path
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Callable
+from typing import Optional, List, Dict, Callable, Tuple
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
@@ -136,6 +137,9 @@ class CameraFile:
 # ============================================================
 
 class CameraManager:
+    # OUI prefix of this specific camera's WiFi module — survives DHCP IP changes.
+    CAMERA_MAC_PREFIX = "50:5a:65"
+
     def __init__(self):
         self.telnet_port = 23
         self.http_port = 8080
@@ -381,7 +385,27 @@ class CameraManager:
         except UnicodeDecodeError:
             return clean.decode("ascii", errors="replace")
 
-    def _run_fresh_command(self, command: str, read_delay: float = 2.0) -> str:
+    def _run_fresh_command(self, command: str, read_delay: float = 2.0,
+                           idle_timeout: float = 0.5, retries: int = 1) -> str:
+        """Run one command on a fresh connection.
+
+        The read loop ends on an idle gap, so a stall on a marginal WiFi link can
+        cut a long listing short with no error. The shell prompt marks a complete
+        reply — if it's missing we retry with a longer patience rather than
+        silently returning half a directory.
+        """
+        for attempt in range(retries + 1):
+            result = self._run_fresh_command_once(
+                command, read_delay, idle_timeout * (attempt + 1))
+            # busybox ash prints "/ # " when the command has finished.
+            if not result or result.rstrip().endswith("#"):
+                return result
+            self.log(f"[CMD] '{command}' looks truncated (no prompt, {len(result)} "
+                     f"chars) — retry {attempt + 1}/{retries}")
+        return result
+
+    def _run_fresh_command_once(self, command: str, read_delay: float,
+                                idle_timeout: float) -> str:
         sock = self._open_tcp(timeout=3.0)
         if not sock:
             self.log(f"[CMD] Failed to open TCP for: {command}")
@@ -391,7 +415,7 @@ class CameraManager:
             self._drain(sock)
             sock.sendall((command + "\n").encode("utf-8"))
             time.sleep(read_delay)
-            sock.settimeout(0.5)
+            sock.settimeout(idle_timeout)
             raw = b""
             try:
                 while True:
@@ -449,12 +473,23 @@ class CameraManager:
 
     # --- File listing ---
 
+    def _discover_media_dirs(self) -> List[str]:
+        """Enumerate the camera's actual DCIM/*SYCAM folders right now. The
+        camera rolls forward to a new folder (102, 103, ...) once one fills
+        up, so a fixed folder pair goes stale — this always reflects reality."""
+        output = self._run_fresh_command("ls /mnt/mmc/DCIM/", read_delay=2.0)
+        clean = re.sub(r'\x1b\[[\d;]*m', '', output)
+        return sorted(set(re.findall(r'\d{3}SYCAM', clean)))
+
     def list_files_via_telnet(self) -> List[CameraFile]:
         files = []
-        for directory, ext, is_video in [("101SYCAM", "mp4", True), ("100SYCAM", "jpg", False)]:
+        for directory in self._discover_media_dirs():
             output = self._run_fresh_command(f"ls -la /mnt/mmc/DCIM/{directory}/", read_delay=3.0)
             self.log(f"[TELNET {directory}] ({len(output)} chars): {output[:500]}")
-            files.extend(self._parse_ls_la(output, directory, ext, is_video))
+            # A folder can hold either type (or, after a rollover, a mix) — match
+            # by each file's own extension rather than assuming by folder number.
+            files.extend(self._parse_ls_la(output, directory, "mp4", True))
+            files.extend(self._parse_ls_la(output, directory, "jpg", False))
         return sorted(files, key=lambda f: f.name.lower())
 
     def _parse_ls_la(self, output: str, directory: str, ext: str, is_video: bool) -> List[CameraFile]:
@@ -523,8 +558,9 @@ class CameraManager:
         root_status, root_body = self._fetch_url(f"http://{self.camera_ip}:{self.http_port}/")
         self.log(f"[HTTP root] status={root_status} body={root_body[:500]}")
 
-        for subdir, ext, is_video in [("101SYCAM", "mp4", True), ("100SYCAM", "jpg", False)]:
-            files.extend(self._fetch_http_listing(subdir, ext, is_video))
+        for subdir in self._discover_media_dirs():
+            files.extend(self._fetch_http_listing(subdir, "mp4", True))
+            files.extend(self._fetch_http_listing(subdir, "jpg", False))
 
         if not files and root_status == 200:
             for m in re.finditer(r'href="([^"]+)/"', root_body):
@@ -577,10 +613,17 @@ class CameraManager:
 
     # --- Size-based sync + naming ---
 
-    def _build_local_size_map(self) -> Dict[int, str]:
-        size_map = {}
+    def _build_local_size_map(self) -> Dict[int, list]:
+        """Map size -> [(local_name, mtime), ...].
+
+        Size alone is not a safe identity test: two different clips can share a
+        byte count, and the loser is silently marked "Synced" and can then be
+        deleted off the camera without ever having been downloaded. We keep every
+        candidate at a given size and disambiguate with mtime, which download_file
+        stamps from the camera's own timestamp via os.utime().
+        """
+        size_map: Dict[int, list] = {}
         try:
-            # Scan root folder and date subfolders
             dirs_to_scan = [self.video_dir]
             if self.date_subfolders:
                 for d in self.video_dir.iterdir():
@@ -589,12 +632,47 @@ class CameraManager:
             for scan_dir in dirs_to_scan:
                 for entry in scan_dir.iterdir():
                     if entry.is_file() and entry.suffix.lower() in (".mp4", ".jpg"):
-                        size = entry.stat().st_size
-                        if size > 0:
-                            size_map[size] = entry.name
+                        try:
+                            st = entry.stat()
+                        except OSError:
+                            continue
+                        if st.st_size > 0:
+                            size_map.setdefault(st.st_size, []).append(
+                                (entry.name, st.st_mtime))
         except OSError:
             pass
         return size_map
+
+    def _match_local_copy(self, f: CameraFile, size_map: Dict[int, list]) -> Optional[str]:
+        """Return the local filename already holding this camera file, or None.
+
+        Requires size to match AND a corroborating signal (same name, or an mtime
+        matching the camera's timestamp). Only when the size is unique locally do
+        we accept size alone — which is the common case and keeps existing
+        libraries from being re-downloaded wholesale."""
+        if f.size_bytes <= 0:
+            return None
+        candidates = size_map.get(f.size_bytes)
+        if not candidates:
+            return None
+
+        for name, _mtime in candidates:
+            if name == f.name:
+                return name
+
+        if f.remote_timestamp:
+            want = f.remote_timestamp.timestamp()
+            for name, mtime in candidates:
+                if abs(mtime - want) <= 2:
+                    return name
+
+        # No corroboration. A size shared by exactly one local file is still a
+        # confident match (this is the overwhelmingly common case, and demanding
+        # more would re-download whole libraries whose mtimes were never
+        # stamped). Only a size shared by SEVERAL local files is genuinely
+        # ambiguous — and that is precisely the case that could delete an
+        # un-downloaded file off the camera, so refuse it.
+        return candidates[0][0] if len(candidates) == 1 else None
 
     def _find_next_counter(self, date: Optional[datetime], ext: str) -> int:
         scheme = self.naming_scheme
@@ -627,28 +705,35 @@ class CameraManager:
     def resolve_file_names(self, files: List[CameraFile]):
         local_sizes = self._build_local_size_map()
         date_counters: Dict[str, int] = {}
+        # Names handed out during THIS pass. Checking the disk alone isn't enough:
+        # two not-yet-downloaded camera files (e.g. the same SCKR number in two
+        # rolled-over DCIM folders) would both find the path free and collide,
+        # with the second silently overwriting the first.
+        assigned: set = set()
 
         for f in files:
-            if f.size_bytes > 0 and f.size_bytes in local_sizes:
+            existing = self._match_local_copy(f, local_sizes)
+            if existing:
                 f.is_downloaded = True
                 f.selected = False
-                f.local_name = local_sizes[f.size_bytes]
-                self.log(f"[RESOLVE] {f.name} -> already have {f.local_name} (size={f.size_bytes})")
+                f.local_name = existing
+                assigned.add(existing)
+                self.log(f"[RESOLVE] {f.name} -> already have {existing} (size={f.size_bytes})")
                 continue
 
             f.is_downloaded = False
             f.selected = True
 
             if self.naming_scheme == NamingScheme.ORIGINAL:
-                f.local_name = f.name
-                candidate = f.local_name
+                candidate = f.name
                 n = 1
-                while (self.video_dir / candidate).exists():
-                    base = Path(f.name).stem
-                    ext = "mp4" if f.is_video else "jpg"
+                base = Path(f.name).stem
+                ext = "mp4" if f.is_video else "jpg"
+                while (self.video_dir / candidate).exists() or candidate in assigned:
                     candidate = f"{base}_{n}.{ext}"
                     n += 1
                 f.local_name = candidate
+                assigned.add(candidate)
             else:
                 ext = "mp4" if f.is_video else "jpg"
                 date = f.remote_timestamp or datetime.now()
@@ -665,6 +750,14 @@ class CameraManager:
                 date_counters[date_key] = counter + 1
                 f.local_name = self.naming_scheme.generate_name(
                     self.naming_prefix, date, ext, counter, self.naming_separator)
+                # Counters are derived from disk state, so a name can still
+                # collide with one assigned earlier in this same pass.
+                while f.local_name in assigned:
+                    counter = date_counters[date_key]
+                    date_counters[date_key] = counter + 1
+                    f.local_name = self.naming_scheme.generate_name(
+                        self.naming_prefix, date, ext, counter, self.naming_separator)
+                assigned.add(f.local_name)
 
             self.log(f"[RESOLVE] {f.name} -> {f.local_name} (new)")
 
@@ -716,7 +809,23 @@ class CameraManager:
                 ts = file.remote_timestamp.timestamp()
                 os.utime(dest, (ts, ts))
 
-            done_cb(dest.stat().st_size > 0)
+            ok = dest.stat().st_size > 0
+            # Without Content-Length we cannot prove the transfer wasn't cut
+            # short, so the copy is unverified. Cross-check the size the camera
+            # reported at listing time; failing that, report it unverified so
+            # the caller declines to auto-delete the only good copy.
+            verified = True
+            if total <= 0:
+                if file.size_bytes > 0:
+                    verified = (downloaded == file.size_bytes)
+                    if not verified:
+                        self.log(f"[DOWNLOAD] {file.name} no Content-Length and size "
+                                 f"mismatch: got {downloaded}, listing said {file.size_bytes}")
+                else:
+                    verified = False
+                    self.log(f"[DOWNLOAD] {file.name} no Content-Length and no listed "
+                             f"size — cannot verify completeness")
+            done_cb(ok, verified)
         except Exception as e:
             self.log(f"[DOWNLOAD] {file.name} error: {e}")
             self._remove_partial(dest)
@@ -736,10 +845,9 @@ class CameraManager:
         self.log(f"[DELETE] {file.name}: {result}")
 
     def wipe_all(self):
-        r1 = self._run_fresh_command("rm -f /mnt/mmc/DCIM/101SYCAM/*", read_delay=2.0)
-        self.log(f"[WIPE] videos: {r1}")
-        r2 = self._run_fresh_command("rm -f /mnt/mmc/DCIM/100SYCAM/*", read_delay=2.0)
-        self.log(f"[WIPE] photos: {r2}")
+        for directory in self._discover_media_dirs():
+            r = self._run_fresh_command(f"rm -f /mnt/mmc/DCIM/{directory}/*", read_delay=2.0)
+            self.log(f"[WIPE] {directory}: {r}")
 
     def cleanup(self):
         if self._persistent_sock:
@@ -751,82 +859,89 @@ class CameraManager:
 
     # --- Camera discovery ---
 
-    def find_camera(self, status_cb: Callable) -> Optional[str]:
-        status_cb("Checking ARP table...")
-        found_ip = None
-        method = ""
+    def _is_valid_ip(self, ip: str) -> bool:
+        try:
+            ipaddress.ip_address(ip)
+            return True
+        except ValueError:
+            return False
 
-        # ARP table scan
+    def local_subnet_prefix(self) -> str:
+        """First three octets of this machine's LAN address, e.g. '192.168.1'."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+            return ".".join(local_ip.split(".")[:3])
+        except OSError:
+            return "192.168.1"
+
+    def _local_subnet_hosts(self) -> List[str]:
+        """Candidate host IPs on this machine's own /24, so discovery isn't tied
+        to any one hardcoded network (fixes drift if you change routers)."""
+        prefix = self.local_subnet_prefix()
+        if not prefix:
+            return []
+        return [f"{prefix}.{i}" for i in range(1, 255)]
+
+    @staticmethod
+    def _ping(ip: str):
+        try:
+            if platform.system() == "Windows":
+                cmd = ["ping", "-n", "1", "-w", "300", ip]
+            else:
+                cmd = ["ping", "-c", "1", ip]
+            subprocess.run(cmd, capture_output=True, timeout=1)
+        except Exception:
+            pass
+
+    def _refresh_arp_cache(self):
+        """Actively probe every host on the subnet so the OS's ARP table is
+        current before we read it — a cold/expired ARP entry (not the camera
+        being gone) is the most common reason discovery used to fail."""
+        hosts = self._local_subnet_hosts()
+        if not hosts:
+            return
+        with ThreadPoolExecutor(max_workers=40) as pool:
+            pool.map(self._ping, hosts)
+
+    def _mac_sweep(self, status_cb: Callable) -> Optional[str]:
+        status_cb("Scanning network...")
+        self._refresh_arp_cache()
         try:
             if platform.system() == "Linux" and os.path.exists("/proc/net/arp"):
                 with open("/proc/net/arp") as f:
                     for line in f:
-                        if "50:5a:65" in line.lower():
-                            found_ip = line.split()[0]
-                            method = "MAC address (/proc)"
-                            break
-            if not found_ip:
-                arp_cmd = ["arp", "-a"]
-                if platform.system() == "Darwin":
-                    arp_cmd = ["/usr/sbin/arp", "-a"]
-                result = subprocess.run(arp_cmd, capture_output=True, text=True, timeout=5)
-                mac_sep = "-" if platform.system() == "Windows" else ":"
-                mac_prefix = f"50{mac_sep}5a{mac_sep}65"
-                for line in result.stdout.splitlines():
-                    if mac_prefix in line.lower():
-                        m = re.search(r'\(([\d.]+)\)', line)
-                        if m:
-                            found_ip = m.group(1)
-                            method = "MAC address"
-                            break
-        except Exception as e:
-            self.log(f"[FIND] ARP error: {e}")
-
-        if found_ip:
-            return found_ip, method
-
-        # Port scan fallback
-        status_cb("Scanning ports...")
-        candidates = []
-        try:
+                        if self.CAMERA_MAC_PREFIX in line.lower():
+                            return line.split()[0]
             arp_cmd = ["arp", "-a"]
             if platform.system() == "Darwin":
                 arp_cmd = ["/usr/sbin/arp", "-a"]
             result = subprocess.run(arp_cmd, capture_output=True, text=True, timeout=5)
-            for m in re.finditer(r'\(([\d.]+)\)', result.stdout):
-                candidates.append(m.group(1))
-        except Exception:
-            pass
+            mac_sep = "-" if platform.system() == "Windows" else ":"
+            mac_prefix = self.CAMERA_MAC_PREFIX.replace(":", mac_sep)
+            for line in result.stdout.splitlines():
+                if mac_prefix in line.lower():
+                    m = re.search(r'\(([\d.]+)\)', line)
+                    if m:
+                        return m.group(1)
+        except Exception as e:
+            self.log(f"[SWEEP] error: {e}")
+        return None
 
-        for last in [83, 84, 85, 80, 81, 82, 86, 87, 88, 89, 90]:
-            ip = f"192.168.1.{last}"
-            if ip not in candidates:
-                candidates.append(ip)
+    def discover(self, status_cb: Callable) -> Tuple[Optional[str], str]:
+        """Single entry point for both manual Connect and the background
+        watcher: try the last-known/manual IP first, then fall back to an
+        active MAC-based subnet sweep. No more hardcoded IP-range guessing."""
+        if self._is_valid_ip(self.camera_ip):
+            status_cb("Checking last known address...")
+            if self.is_reachable():
+                return self.camera_ip, "last known address"
 
-        found = [None]
-        lock = threading.Lock()
-
-        def check_ip(ip):
-            try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(0.8)
-                s.connect((ip, 23))
-                s.close()
-                s2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s2.settimeout(0.8)
-                s2.connect((ip, 8080))
-                s2.close()
-                with lock:
-                    if found[0] is None:
-                        found[0] = ip
-            except (OSError, socket.error):
-                pass
-
-        with ThreadPoolExecutor(max_workers=20) as pool:
-            pool.map(check_ip, candidates)
-
-        if found[0]:
-            return found[0], "port scan (telnet+HTTP)"
+        ip = self._mac_sweep(status_cb)
+        if ip:
+            return ip, "MAC address"
         return None, ""
 
 
@@ -869,6 +984,8 @@ class HumDropApp(ctk.CTk):
         self.is_downloading = False
         self._download_cancel = False
         self._heartbeat_running = False
+        self._watch_running = False
+        self._watch_miss_count = 0
         self._original_warning_shown = False  # one-per-session popup
         self.auto_delete_var = ctk.BooleanVar(value=False)
 
@@ -880,6 +997,7 @@ class HumDropApp(ctk.CTk):
         self._build_ui()
         self._restore_storage_display()
         self._show_disconnected()
+        self._start_watch()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # Keyboard shortcuts
@@ -1154,13 +1272,8 @@ class HumDropApp(ctk.CTk):
                      text_color=TEXT_SEC).pack(side="left")
 
         self.ip_entry = ctk.CTkEntry(ip_frame, width=150, font=ctk.CTkFont(family="Courier", size=16))
-        self.ip_entry.pack(side="left", padx=(8, 4))
+        self.ip_entry.pack(side="left", padx=(8, 10))
         self.ip_entry.insert(0, self.camera.camera_ip)
-
-        self.find_btn = ctk.CTkButton(ip_frame, text="Find", width=50, height=30,
-                                       fg_color=TEAL, hover_color=TEAL_HOVER,
-                                       text_color="white", command=self._find_camera)
-        self.find_btn.pack(side="left", padx=(0, 10))
 
         # Status dot + label
         self.status_dot = ctk.CTkLabel(ip_frame, text="\u25CF", font=ctk.CTkFont(size=18),
@@ -1239,8 +1352,8 @@ class HumDropApp(ctk.CTk):
                      "1.  Open the camera app on your phone\n"
                      "2.  Start the camera stream\n"
                      "3.  Make sure you're on the same Wi-Fi network\n"
-                     '4.  Enter the camera IP, or tap "Find" to auto-discover,\n'
-                     '     then "Connect"',
+                     '4.  HumDrop watches for it automatically — or tap\n'
+                     '     "Connect" to try right now',
                      font=ctk.CTkFont(size=15), text_color=TEXT_SEC,
                      justify="left").pack()
 
@@ -1264,12 +1377,16 @@ class HumDropApp(ctk.CTk):
         btn_row = ctk.CTkFrame(hdr, fg_color="transparent")
         btn_row.grid(row=0, column=1, sticky="e")
 
-        ctk.CTkButton(btn_row, text="Select All", width=95, height=32, font=ctk.CTkFont(size=15),
-                      fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI,
-                      command=self._select_all).pack(side="left", padx=(0, 4))
-        ctk.CTkButton(btn_row, text="Select New", width=95, height=32, font=ctk.CTkFont(size=15),
-                      fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI,
-                      command=self._select_new).pack(side="left")
+        self.selectall_btn = ctk.CTkButton(
+            btn_row, text="Select All", width=95, height=32, font=ctk.CTkFont(size=15),
+            fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI,
+            command=self._select_all)
+        self.selectall_btn.pack(side="left", padx=(0, 4))
+        self.selectnew_btn = ctk.CTkButton(
+            btn_row, text="Select New", width=95, height=32, font=ctk.CTkFont(size=15),
+            fg_color=BTN_SEC, hover_color=BTN_SEC_HOVER, text_color=TEXT_PRI,
+            command=self._select_new)
+        self.selectnew_btn.pack(side="left")
 
         # Table (ttk.Treeview with themed styling)
         self.table_frame = ctk.CTkFrame(f, fg_color=BG_CARD, corner_radius=8,
@@ -1524,25 +1641,35 @@ class HumDropApp(ctk.CTk):
                 s = os.sep.join(parts[:2]) + "/.../" + os.sep.join(parts[-2:])
         return s
 
+    def _row_values_and_tags(self, i: int, f: "CameraFile"):
+        check = "\u2611" if f.selected else "\u2610"
+        save_as = f.local_name if f.is_renamed else "\u2014"
+        type_str = "Video" if f.is_video else "Photo"
+        status_str = "Synced" if f.is_downloaded else "New"
+
+        tags = ["synced" if f.is_downloaded else "new"]
+        if i % 2 == 1:
+            tags.append("stripe")
+
+        return (check, f.name, save_as, f.size_string, type_str, status_str), tuple(tags)
+
     def _refresh_table(self):
         self.tree.delete(*self.tree.get_children())
         for i, f in enumerate(self.files):
-            check = "\u2611" if f.selected else "\u2610"
-            save_as = f.local_name if f.is_renamed else "\u2014"
-            type_str = "Video" if f.is_video else "Photo"
-            status_str = "Synced" if f.is_downloaded else "New"
+            values, tags = self._row_values_and_tags(i, f)
+            self.tree.insert("", "end", iid=str(i), values=values, tags=tags)
 
-            tags = []
-            if f.is_downloaded:
-                tags.append("synced")
-            else:
-                tags.append("new")
-            if i % 2 == 1:
-                tags.append("stripe")
-
-            self.tree.insert("", "end", iid=str(i),
-                             values=(check, f.name, save_as, f.size_string, type_str, status_str),
-                             tags=tuple(tags))
+    def _update_table_row(self, idx: int):
+        """Update a single row in place \u2014 avoids rebuilding the whole table
+        (O(n) widget ops) after every file in a large batch download, which
+        made total download time scale as O(n^2) with the library size."""
+        if not (0 <= idx < len(self.files)):
+            return
+        row_id = str(idx)
+        if not self.tree.exists(row_id):
+            return
+        values, tags = self._row_values_and_tags(idx, self.files[idx])
+        self.tree.item(row_id, values=values, tags=tags)
 
     def _update_summary(self):
         total = len(self.files)
@@ -1562,6 +1689,10 @@ class HumDropApp(ctk.CTk):
     # --- Tree click handling ---
 
     def _on_tree_click(self, event):
+        # The running batch is snapshotted at launch, so toggling now would do
+        # nothing except mislead — and the download thread overwrites `selected`.
+        if self.is_downloading:
+            return
         region = self.tree.identify_region(event.x, event.y)
         if region != "cell":
             return
@@ -1587,7 +1718,9 @@ class HumDropApp(ctk.CTk):
         if not raw:
             return
         if raw.isdigit() and 0 <= int(raw) <= 255:
-            raw = f"192.168.1.{raw}"
+            # Expand a bare last octet against THIS machine's subnet rather than
+            # a hardcoded 192.168.1.x, matching how discovery sweeps.
+            raw = f"{self.camera.local_subnet_prefix()}.{raw}"
             self.ip_entry.delete(0, "end")
             self.ip_entry.insert(0, raw)
         self.camera.camera_ip = raw
@@ -1608,33 +1741,53 @@ class HumDropApp(ctk.CTk):
             self._show_disconnected()
             self._update_status("Disconnected", connected=False)
             self.connect_btn.configure(text="Connect")
+            self._start_watch()
             return
 
         self._sync_ip()
+        # Stop the background watcher first: otherwise an already-scheduled
+        # poll can fire during this (multi-second) attempt, find the camera
+        # too, and race us into a second concurrent start_httpd() on the same
+        # socket — which wedges the UI with Connect stuck disabled.
+        self._stop_watch()
         self.connect_btn.configure(state="disabled")
         self._update_status("Connecting...", connected=None)
         self._start_connect_spinner()
 
         def do_connect():
-            reachable = self.camera.is_reachable()
-            if not reachable:
+            ip, method = self.camera.discover(
+                lambda msg: self.after(0, lambda m=msg: self._update_status(m))
+            )
+            if not ip:
                 self.after(0, lambda: self._connect_failed())
                 return
+            self.camera.camera_ip = ip
+            self.camera.save_settings()
+            self.after(0, lambda: self._apply_found_ip(ip))
             self.after(0, lambda: self._update_status("Starting camera server..."))
             self.camera.start_httpd()
             self.after(0, lambda: self._connect_success())
 
         threading.Thread(target=do_connect, daemon=True).start()
 
+    def _apply_found_ip(self, ip: str):
+        self.ip_entry.delete(0, "end")
+        self.ip_entry.insert(0, ip)
+
     def _connect_failed(self):
         self._stop_connect_spinner()
         self.connect_btn.configure(state="normal")
-        self._update_status("Not found", connected=False)
+        self._update_status("Watching for camera...", connected=False)
         messagebox.showwarning("Camera Not Found",
-                               f"Could not reach the camera at {self.camera.camera_ip}.\n\n"
+                               f"Could not reach the camera (last known address "
+                               f"{self.camera.camera_ip}, and no device matching its "
+                               f"MAC address was found on the network).\n\n"
                                "Make sure:\n1. The camera app is open and streaming\n"
                                "2. You're on the same Wi-Fi network\n"
-                               "3. The camera is powered on")
+                               "3. The camera is powered on\n\n"
+                               "HumDrop will keep watching in the background and "
+                               "connect automatically once it's reachable.")
+        self._start_watch()
 
     def _connect_success(self):
         self._stop_connect_spinner()
@@ -1642,8 +1795,10 @@ class HumDropApp(ctk.CTk):
         if not self.camera.is_reachable():
             self._update_status("Disconnected", connected=False)
             self.connect_btn.configure(state="normal", text="Reconnect")
+            self._start_watch()
             return
         self.is_connected = True
+        self._stop_watch()
         self.connect_btn.configure(state="normal", text="Disconnect")
         self._update_status("Connected", connected=True)
         self._show_connected()
@@ -1653,6 +1808,12 @@ class HumDropApp(ctk.CTk):
 
     def _refresh(self):
         if not self.is_connected:
+            return
+        # A refresh replaces self.files wholesale. Doing that under a running
+        # download corrupts the batch's indices (or kills its thread outright),
+        # so refuse — the naming controls and Cmd+R can both land here.
+        if self.is_downloading:
+            self.camera.log("[REFRESH] Ignored — download in progress")
             return
         self._disable_buttons()
         self._update_status("Scanning camera...")
@@ -1773,9 +1934,12 @@ class HumDropApp(ctk.CTk):
 
                 done_event = threading.Event()
                 success_flag = [False]
+                verified_flag = [True]
 
-                def done(ok, flag=success_flag, ev=done_event):
+                def done(ok, verified=True, flag=success_flag,
+                         vflag=verified_flag, ev=done_event):
                     flag[0] = ok
+                    vflag[0] = verified
                     ev.set()
 
                 self.camera.download_file(file, prog, done,
@@ -1796,18 +1960,28 @@ class HumDropApp(ctk.CTk):
                 if success_flag[0]:
                     completed_count += 1
                     cumulative_bytes[0] += file.size_bytes or 0
-                    self.files[idx].is_downloaded = True
-                    self.files[idx].selected = False
-                    self.after(0, self._refresh_table)
+                    # self.files can be replaced by a refresh mid-batch; only
+                    # touch the row if it still holds this exact file.
+                    if idx < len(self.files) and self.files[idx] is file:
+                        self.files[idx].is_downloaded = True
+                        self.files[idx].selected = False
+                        self.after(0, lambda i=idx: self._update_table_row(i))
 
-                    # Per-file auto-delete: remove from camera right after download
+                    # Per-file auto-delete: remove from camera right after download.
+                    # Never delete the camera's only copy on the strength of a
+                    # transfer we couldn't prove was complete.
                     if self.auto_delete_var.get():
-                        self.after(0, lambda n=file.name, c=completed:
-                            self.progress_label.configure(
-                                text=f"Auto-deleting {n} from camera ({c + 1}/{total})..."))
-                        self.camera.delete_file(file)
-                        auto_deleted_count += 1
-                        self.camera.log(f"[AUTO-DELETE] {file.name} deleted from camera")
+                        if not verified_flag[0]:
+                            self.camera.log(
+                                f"[AUTO-DELETE] SKIPPED {file.name} — download could "
+                                f"not be verified complete; keeping camera copy")
+                        else:
+                            self.after(0, lambda n=file.name, c=completed:
+                                self.progress_label.configure(
+                                    text=f"Auto-deleting {n} from camera ({c + 1}/{total})..."))
+                            self.camera.delete_file(file)
+                            auto_deleted_count += 1
+                            self.camera.log(f"[AUTO-DELETE] {file.name} deleted from camera")
                 else:
                     # Download failed — check if camera is still reachable
                     if not self.camera.is_reachable():
@@ -1891,6 +2065,18 @@ class HumDropApp(ctk.CTk):
         self.progress_bar.grid_forget()
         self.progress_label.grid_forget()
 
+    # Selection and naming controls have no effect on an already-started batch
+    # (it is snapshotted at launch, and the download thread writes `selected`
+    # itself), so leaving them live during a download is misleading.
+    def _set_secondary_controls(self, state: str):
+        for attr in ("selectall_btn", "selectnew_btn", "scheme_menu", "prefix_entry"):
+            w = getattr(self, attr, None)
+            if w is not None:
+                try:
+                    w.configure(state=state)
+                except Exception:
+                    pass
+
     def _re_enable_buttons(self):
         """Centralized helper to re-enable all action buttons."""
         self.download_btn.configure(state="normal")
@@ -1899,6 +2085,7 @@ class HumDropApp(ctk.CTk):
         self.wipe_btn.configure(state="normal")
         self.delete_btn.configure(state="normal")
         self.auto_delete_cb.configure(state="normal")
+        self._set_secondary_controls("normal")
 
     def _disable_buttons(self):
         """Centralized helper to disable all action buttons during operations."""
@@ -1908,6 +2095,7 @@ class HumDropApp(ctk.CTk):
         self.wipe_btn.configure(state="disabled")
         self.delete_btn.configure(state="disabled")
         self.auto_delete_cb.configure(state="disabled")
+        self._set_secondary_controls("disabled")
 
     def _handle_disconnect(self, message: str = "Connection lost"):
         """Centralized disconnect handler — dramatic UI reset to disconnected state."""
@@ -1943,6 +2131,10 @@ class HumDropApp(ctk.CTk):
         # Notify user
         self._send_notification("HumDrop", "Connection lost")
 
+        # Resume background watching so it reconnects on its own once the
+        # camera's reachable again, instead of waiting for another manual click.
+        self._start_watch()
+
     def _start_heartbeat(self):
         """Start a periodic check that the camera is still reachable."""
         self._heartbeat_running = True
@@ -1969,6 +2161,63 @@ class HumDropApp(ctk.CTk):
                 self.after(5000, self._heartbeat_check)
 
         threading.Thread(target=check, daemon=True).start()
+
+    # --- Background camera watcher ---
+    # Polls quietly while disconnected so the camera (which sleeps between
+    # motion-triggered clips and drifts to a new DHCP IP on wake) connects on
+    # its own the moment it's reachable, with no button-mashing or popups.
+
+    _WATCH_MIN_INTERVAL_MS = 20_000
+    _WATCH_MAX_INTERVAL_MS = 60_000
+    _WATCH_BACKOFF_STEP_MS = 10_000
+
+    def _start_watch(self):
+        if self._watch_running:
+            return
+        self._watch_running = True
+        self._watch_miss_count = 0
+        self._watch_check()
+
+    def _stop_watch(self):
+        self._watch_running = False
+
+    def _watch_check(self):
+        if not self._watch_running or self.is_connected:
+            return
+        self._update_status("Watching for camera...", connected=False)
+
+        def check():
+            ip, method = self.camera.discover(lambda msg: None)
+            if not (self._watch_running and not self.is_connected):
+                return  # state changed while we were scanning
+            if ip:
+                self.after(0, lambda: self._auto_connect(ip, method))
+            else:
+                self._watch_miss_count += 1
+                interval = min(
+                    self._WATCH_MAX_INTERVAL_MS,
+                    self._WATCH_MIN_INTERVAL_MS + self._watch_miss_count * self._WATCH_BACKOFF_STEP_MS,
+                )
+                self.after(interval, self._watch_check)
+
+        threading.Thread(target=check, daemon=True).start()
+
+    def _auto_connect(self, ip: str, method: str):
+        if not (self._watch_running and not self.is_connected):
+            return
+        self.camera.camera_ip = ip
+        self._apply_found_ip(ip)
+        self.camera.save_settings()
+        self._watch_miss_count = 0
+        self._update_status(f"Found camera ({method}) — connecting...", connected=None)
+        self.connect_btn.configure(state="disabled")
+
+        def do_connect():
+            self.after(0, lambda: self._update_status("Starting camera server..."))
+            self.camera.start_httpd()
+            self.after(0, lambda: self._connect_success())
+
+        threading.Thread(target=do_connect, daemon=True).start()
 
     def _delete_selected(self):
         """Delete checked/selected files from camera with progress bar."""
@@ -2124,12 +2373,16 @@ class HumDropApp(ctk.CTk):
         self.after(4000, self._hide_progress)
 
     def _select_all(self):
+        if self.is_downloading:
+            return
         for f in self.files:
             f.selected = True
         self._refresh_table()
         self._update_summary()
 
     def _select_new(self):
+        if self.is_downloading:
+            return
         for f in self.files:
             f.selected = not f.is_downloaded
         self._refresh_table()
@@ -2263,33 +2516,6 @@ class HumDropApp(ctk.CTk):
                     subprocess.run(["notify-send", title, message], capture_output=True, timeout=5)
         except Exception:
             pass  # Notifications are best-effort
-
-    def _find_camera(self):
-        self.find_btn.configure(state="disabled")
-
-        def do_find():
-            result = self.camera.find_camera(
-                lambda msg: self.after(0, lambda m=msg: self._update_status(m))
-            )
-            ip, method = result if result else (None, "")
-            self.after(0, lambda: self._find_done(ip, method))
-
-        threading.Thread(target=do_find, daemon=True).start()
-
-    def _find_done(self, ip: Optional[str], method: str):
-        self.find_btn.configure(state="normal")
-        self._update_status("Disconnected", connected=False)
-        if ip:
-            self.ip_entry.delete(0, "end")
-            self.ip_entry.insert(0, ip)
-            self.camera.camera_ip = ip
-            self.camera.save_settings()
-            messagebox.showinfo("Camera Found!", f"Found camera at {ip}\n(Detected via {method})")
-        else:
-            messagebox.showwarning("Camera Not Found",
-                                    "No camera found on your network.\n\n"
-                                    "Make sure:\n1. The camera app is open and streaming\n"
-                                    "2. You're on the same Wi-Fi network")
 
     def _scheme_changed(self, value: str):
         schemes = list(NamingScheme)
@@ -2530,7 +2756,7 @@ class HumDropApp(ctk.CTk):
         ctk.CTkLabel(banner_inner, text="HumDrop",
                      font=ctk.CTkFont(size=26, weight="bold"),
                      text_color="white").pack(pady=(2, 0))
-        ctk.CTkLabel(banner_inner, text="v0.082  \u2022  Camera Sync",
+        ctk.CTkLabel(banner_inner, text="v0.09  \u2022  Camera Sync",
                      font=ctk.CTkFont(size=15),
                      text_color=TEAL_HOVER).pack()
 
@@ -2592,6 +2818,15 @@ class HumDropApp(ctk.CTk):
 
     def _on_close(self):
         self._stop_heartbeat()
+        self._stop_watch()
+        # Signal an in-flight download to stop and give it a moment to clean up
+        # its partial file. Download threads are daemons and aren't joined at
+        # interpreter exit, so without this a half-written file is left behind.
+        if self.is_downloading:
+            self._download_cancel = True
+            deadline = time.time() + 3.0
+            while self.is_downloading and time.time() < deadline:
+                time.sleep(0.05)
         self.camera.cleanup()
         self.destroy()
 
