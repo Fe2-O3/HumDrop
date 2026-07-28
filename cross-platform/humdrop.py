@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HumDrop v0.10-b2 — Cross-platform camera sync utility
+HumDrop v0.10-b3 — Cross-platform camera sync utility
 By Kenneth Russell DeGraff
 
 Syncs videos and photos from WiFi-enabled trail/bird cameras.
@@ -150,17 +150,18 @@ class CameraManager:
     # OUI prefix of this specific camera's WiFi module — survives DHCP IP changes.
     CAMERA_MAC_PREFIX = "50:5a:65"
 
-    # Where to look when the shell is not on 23. There is no authoritative list
-    # to copy: the vendor Android app never speaks to the camera over the LAN at
-    # all — every command goes out through a P2P cloud relay — so it has no idea
-    # telnet exists. Telnet is an undocumented firmware backdoor, which also
-    # means firmware is free to move it or drop it without breaking the app.
-    # These are the ports embedded camera firmware commonly puts a shell on.
-    SHELL_PORT_CANDIDATES = (23, 2323, 2222, 9527, 24, 8023, 1023, 23023, 4321)
-    # Ports that might already be serving HTTP. Worth knowing about: if a camera
-    # has no shell but does run a web server, that is the only remaining way in.
-    HTTP_PORT_CANDIDATES = (80, 8080, 81, 8000, 8081, 8088, 8090, 8181, 8888)
+    # Telnet is an undocumented firmware backdoor, so firmware is free to put it
+    # anywhere. Rather than guess from a candidate list, sweep every port and
+    # then work out what the open ones actually are. Closed ports on a LAN
+    # device answer with an immediate RST, so the sweep costs seconds, not
+    # minutes — the port count is not what makes a scan slow.
+    PORT_RANGE = (1, 65535)
+    # Only used to break ties and to decide what to fingerprint first.
+    LIKELY_SHELL_PORTS = (23, 2323, 2222, 9527, 24, 8023, 1023, 23023, 4321)
     _PROBE_TOKEN = "HUMDROPSHELLOK"
+    # Deep fingerprinting costs ~2.5s per port, so bound it. A camera with more
+    # open ports than this is not a camera we can guess our way into anyway.
+    _MAX_DEEP_PROBES = 40
 
     def __init__(self):
         self.telnet_port = 23
@@ -1008,26 +1009,83 @@ class CameraManager:
         except Exception:
             return None
 
-    def _probe_port(self, ip: str, port: int) -> Optional[Tuple[int, str]]:
-        if port in self.SHELL_PORT_CANDIDATES:
-            kind = self._probe_shell(ip, port)
-            if kind == "usable":
-                return port, "SHELL (usable)"
-            if kind == "login":
-                return port, "shell, but it asks for a login"
+    @staticmethod
+    def _scan_workers() -> int:
+        """How many sockets we can hold open at once.
+
+        A full sweep is only fast if it is wide, and width is capped by the
+        file-descriptor limit — 256 by default on macOS, which would otherwise
+        quietly throttle the scan to a crawl or start raising EMFILE.
+        """
+        try:
+            import resource
+            soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+            want = min(hard, 4096) if hard > 0 else 4096
+            if soft < want:
+                resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+                soft = want
+        except Exception:
+            soft = 256                     # Windows, or the bump was refused
+        return max(32, min(480, soft - 64))
+
+    def scan_open_ports(self, ip: str,
+                        status_cb: Optional[Callable] = None) -> List[int]:
+        """Connect-sweep every port and return the ones that answer."""
+        lo, hi = self.PORT_RANGE
+        ports = range(lo, hi + 1)
+        workers = self._scan_workers()
+        done = [0]
+        lock = threading.Lock()
+
+        def check(port: int) -> Optional[int]:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.6)
+            try:
+                if sock.connect_ex((ip, port)) == 0:
+                    return port
+            except (OSError, socket.error):
+                pass
+            finally:
+                sock.close()
+            return None
+
+        def tick():
+            with lock:
+                done[0] += 1
+                n = done[0]
+            if status_cb and n % 2000 == 0:
+                status_cb(f"Scanning {ip} — {n:,} of {hi - lo + 1:,} ports...")
+
+        def run(port: int) -> Optional[int]:
+            r = check(port)
+            tick()
+            return r
+
+        if status_cb:
+            status_cb(f"Scanning all {hi - lo + 1:,} ports on {ip}...")
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            open_ports = [p for p in pool.map(run, ports) if p is not None]
+        self.log(f"[SCAN] {ip}: {open_ports or 'nothing open'}")
+        return open_ports
+
+    def _fingerprint(self, ip: str, port: int) -> str:
+        """Work out what an already-known-open port is running."""
+        kind = self._probe_shell(ip, port)
+        if kind == "usable":
+            return "SHELL (usable)"
+        if kind == "login":
+            return "shell, but it asks for a login"
         desc = self._probe_http(ip, port)
         if desc:
-            return port, desc
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(1.5)
-        try:
-            if sock.connect_ex((ip, port)) == 0:
-                return port, "open, not recognised"
-        except (OSError, socket.error):
-            pass
-        finally:
-            sock.close()
-        return None
+            return desc
+        return "open, not recognised"
+
+    def _probe_order(self, ports: List[int]) -> List[int]:
+        """Likely shell ports first, so a scan that has to stop early still
+        checks the ports most worth checking."""
+        return sorted(ports, key=lambda p: (
+            self.LIKELY_SHELL_PORTS.index(p) if p in self.LIKELY_SHELL_PORTS
+            else len(self.LIKELY_SHELL_PORTS), p))
 
     def probe_services(self, ip: str,
                        status_cb: Optional[Callable] = None) -> Dict[int, str]:
@@ -1037,24 +1095,29 @@ class CameraManager:
         telling someone with unknown firmware what their camera is really
         running instead of just reporting a dead connection.
         """
-        ports = sorted(set(self.SHELL_PORT_CANDIDATES) | set(self.HTTP_PORT_CANDIDATES))
-        if status_cb:
-            status_cb(f"Probing {len(ports)} ports on {ip}...")
+        open_ports = self._probe_order(self.scan_open_ports(ip, status_cb))
+        skipped = open_ports[self._MAX_DEEP_PROBES:]
+        open_ports = open_ports[:self._MAX_DEEP_PROBES]
+        if status_cb and open_ports:
+            status_cb(f"Identifying {len(open_ports)} open port(s)...")
         found: Dict[int, str] = {}
-        with ThreadPoolExecutor(max_workers=20) as pool:
-            for r in pool.map(lambda p: self._probe_port(ip, p), ports):
-                if r:
-                    found[r[0]] = r[1]
+        with ThreadPoolExecutor(max_workers=min(20, len(open_ports) or 1)) as pool:
+            for port, desc in zip(open_ports,
+                                  pool.map(lambda p: self._fingerprint(ip, p),
+                                           open_ports)):
+                found[port] = desc
+        for port in skipped:
+            found[port] = "open, not checked"
+        if skipped:
+            self.log(f"[PROBE] {len(skipped)} open ports left unidentified")
         self.log(f"[PROBE] {ip}: {found or 'nothing open'}")
         return found
 
     def find_shell_port(self, ip: str) -> Optional[int]:
         """Locate the shell wherever the firmware put it, preferring 23."""
-        with ThreadPoolExecutor(max_workers=len(self.SHELL_PORT_CANDIDATES)) as pool:
-            checked = list(pool.map(lambda p: (p, self._probe_shell(ip, p)),
-                                    self.SHELL_PORT_CANDIDATES))
-        for port, kind in checked:        # map preserves order, so 23 wins ties
-            if kind == "usable":
+        ports = self._probe_order(self.scan_open_ports(ip))
+        for port in ports[:self._MAX_DEEP_PROBES]:
+            if self._probe_shell(ip, port) == "usable":
                 return port
         return None
 
@@ -1947,20 +2010,23 @@ class HumDropApp(ctk.CTk):
         """
         self._update_status(f"Scanning {ip}...", connected=False)
 
+        def status(msg):
+            self.after(0, lambda: self._update_status(msg, connected=False))
+
         def work():
-            found = self.camera.probe_services(ip)
+            found = self.camera.probe_services(ip, status)
             self.after(0, lambda: self._diagnostic_done(ip, found))
 
         threading.Thread(target=work, daemon=True).start()
 
     def _diagnostic_done(self, ip: str, found: Dict[int, str]):
         self._update_status("Watching for camera...", connected=False)
-        checked = len(set(self.camera.SHELL_PORT_CANDIDATES) |
-                      set(self.camera.HTTP_PORT_CANDIDATES))
+        lo, hi = self.camera.PORT_RANGE
+        checked = hi - lo + 1
         if not found:
             messagebox.showwarning(
                 "Diagnostic: nothing is listening",
-                f"Checked {checked} ports on {ip}; none are open.\n\n"
+                f"Checked all {checked:,} ports on {ip}; none are open.\n\n"
                 "If the camera was definitely awake, this most likely means "
                 "the firmware has no telnet shell. HumDrop needs one — it "
                 "starts the file server by running a command over telnet, so "
@@ -3020,7 +3086,7 @@ class HumDropApp(ctk.CTk):
         ctk.CTkLabel(banner_inner, text="HumDrop",
                      font=ctk.CTkFont(size=26, weight="bold"),
                      text_color="white").pack(pady=(2, 0))
-        ctk.CTkLabel(banner_inner, text="v0.10-b2  \u2022  Camera Sync",
+        ctk.CTkLabel(banner_inner, text="v0.10-b3  \u2022  Camera Sync",
                      font=ctk.CTkFont(size=15),
                      text_color=TEAL_HOVER).pack()
 
